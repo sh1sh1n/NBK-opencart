@@ -415,6 +415,8 @@ function nbk_comma_locale() {
 }
 
 $fixture = file_get_contents(__DIR__ . '/fixtures/rates_all.xml');
+// Same feed plus a KZT item at 2 tenge: the base must stay 1 regardless.
+$fixtureKzt = str_replace('<channel>', "<channel>\n\t\t<item>\n\t\t\t<title>KZT</title>\n\t\t\t<description>2</description>\n\t\t\t<quant>1</quant>\n\t\t</item>", $fixture, $kztInserted);
 $codes   = array('KZT', 'USD', 'EUR', 'AMD', 'RUB', 'CNY', 'GBP', 'XZR', 'XND', 'XQZ');
 
 echo 'PHP ' . PHP_VERSION . "\n";
@@ -507,6 +509,27 @@ foreach ($models as $side => $file) {
 		$result = $model->refresh();
 		check($side . ': ' . $label . ' returns false and writes nothing', $result === false && $registry->get('db')->writes() === array(), show($result));
 	}
+
+	// A KZT item in the feed must not replace the base: same writes as without it.
+	// With it honoured, USD would be 2/500 and KZT (default USD) 500/2.
+	check($side . ': KZT item was added to the test feed', $kztInserted === 1 && substr_count($fixtureKzt, '<title>KZT</title>') === 1, show($kztInserted));
+
+	NbkFeed::$response = $fixtureKzt;
+	list($model, $registry) = nbk_model($ns, array('currency_nbk_status' => 1, 'config_currency' => 'KZT', 'currency_nbk_margins' => 'USD:2'), $codes);
+	$result = $model->refresh();
+	$writes = $registry->get('db')->writes();
+	$expect = array('KZT' => '1.00000000', 'USD' => '0.00204000', 'EUR' => '0.00181818', 'AMD' => '0.80000000', 'RUB' => '0.18181818', 'CNY' => '0.01428571');
+	ksort($writes);
+	ksort($expect);
+	check($side . ': feed KZT item ignored, default KZT rates unchanged', $result === true && $writes === $expect, show($result) . ' ' . show($writes));
+
+	list($model, $registry) = nbk_model($ns, array('currency_nbk_status' => 1, 'config_currency' => 'USD', 'currency_nbk_margins' => 'USD:2,EUR:10,amd:-50'), $codes);
+	$result = $model->refresh();
+	$writes = $registry->get('db')->writes();
+	$expect = array('KZT' => '500.00000000', 'USD' => '1.00000000', 'EUR' => '1.00000000', 'AMD' => '200.00000000', 'RUB' => '90.90909091', 'CNY' => '7.14285714');
+	ksort($writes);
+	ksort($expect);
+	check($side . ': feed KZT item ignored, default USD cross-rates unchanged', $result === true && $writes === $expect, show($result) . ' ' . show($writes));
 
 	NbkFeed::$response = $fixture;
 

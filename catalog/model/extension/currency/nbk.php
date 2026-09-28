@@ -124,7 +124,7 @@ class ModelExtensionCurrencyNbk extends Model {
 		}
 
 		// NBK feed item: <description> tenge per <quant> units of <title>.
-		// Build "KZT per 1 unit" table. KZT is the feed base and is NOT listed -> add it manually.
+		// Build "KZT per 1 unit" table. KZT is the feed base: it is not listed, so add it manually and never let a feed item override it.
 		$rates = array('KZT' => 1.0);
 
 		foreach ($dom->getElementsByTagName('item') as $item) {
@@ -141,6 +141,12 @@ class ModelExtensionCurrencyNbk extends Model {
 			$quantity = $quant ? (float)$quant->nodeValue : 1.0;
 
 			if ($code === '' || $rate <= 0 || $quantity <= 0) {
+				continue;
+			}
+
+			// A KZT item (absent from the real feed) would replace the base 1.0
+			// and silently skew every cross-rate, so the base always wins.
+			if ($code === 'KZT') {
 				continue;
 			}
 
