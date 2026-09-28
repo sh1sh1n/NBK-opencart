@@ -1,3 +1,9 @@
 .DS_Store
 .claude/settings.local.json
 graphify-out/
+
+# Локальные инструменты разработки, в репозиторий не публикуются
+/CLAUDE.md
+/.claude/
+/tasks/
+/tests/
