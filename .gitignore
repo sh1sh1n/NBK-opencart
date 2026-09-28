@@ -7,3 +7,7 @@ graphify-out/
 /.claude/
 /tasks/
 /tests/
+
+# Артефакты сборки архива для установщика
+/build/
+/*.ocmod.zip
