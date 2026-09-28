@@ -41,6 +41,14 @@ fi
 echo "== static ($("$PHP_DEFAULT" -r 'echo PHP_VERSION;'))"
 "$PHP_DEFAULT" -d error_reporting=-1 -d display_errors=1 tests/static.php || failed="$failed static"
 
+# List the files once. find runs apart from sort so its exit status is not
+# lost in a pipe; the files are counted so an empty list or a heredoc that
+# was never created cannot pass as a clean lint.
+php_files="$(find . -name '*.php' -not -path './.git/*' -not -path './graphify-out/*')"
+list_status=$?
+php_files="$(printf '%s\n' "$php_files" | sort)"
+php_total="$(printf '%s\n' "$php_files" | grep -c .)"
+
 for v in $VERSIONS; do
 	echo
 	if ! bin="$(find_php "$v")"; then
@@ -51,7 +59,11 @@ for v in $VERSIONS; do
 
 	echo "== PHP $v lint ($bin)"
 	lint_ok=1
+	checked=0
 	while IFS= read -r f; do
+		# An empty list still yields one blank line from the heredoc.
+		[ -n "$f" ] || continue
+		checked=$((checked + 1))
 		out="$("$bin" -d error_reporting=-1 -d display_errors=1 -l "$f" 2>&1)"
 		# Anything besides the single success line (e.g. compile-time
 		# deprecations such as implicit nullable types on 8.4+) is a failure.
@@ -61,10 +73,22 @@ for v in $VERSIONS; do
 			lint_ok=0
 		fi
 	done <<EOF
-$(find . -name '*.php' -not -path './.git/*' -not -path './graphify-out/*' | sort)
+$php_files
 EOF
+	# Checked after the loop so a loop that never ran still counts as a failure.
+	if [ "$list_status" != 0 ]; then
+		echo "FAIL could not list PHP files (find exit $list_status)"
+		lint_ok=0
+	fi
+	if [ "$checked" = 0 ]; then
+		echo "FAIL no PHP files were linted"
+		lint_ok=0
+	elif [ "$checked" != "$php_total" ]; then
+		echo "FAIL linted $checked of $php_total PHP files"
+		lint_ok=0
+	fi
 	if [ "$lint_ok" = 1 ]; then
-		echo "ok   all PHP files lint clean"
+		echo "ok   all $checked PHP files lint clean"
 	else
 		failed="$failed lint-$v"
 	fi
