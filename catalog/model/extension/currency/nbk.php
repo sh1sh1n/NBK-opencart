@@ -23,19 +23,49 @@ class ModelExtensionCurrencyNbk extends Model {
 	private function parseMargins() {
 		$margins = array();
 
-		preg_match_all('/(?<![A-Za-z])' . self::MARGIN_PAIR . '/', (string)$this->config->get('currency_nbk_margins'), $matches, PREG_SET_ORDER);
-
-		foreach ($matches as $m) {
-			$margins[strtoupper($m[1])] = (float)str_replace(',', '.', $m[2]);
+		foreach ($this->matchMarginPairs((string)$this->config->get('currency_nbk_margins')) as $pair) {
+			$margins[$pair[0]] = $pair[1];
 		}
 
 		return $margins;
+	}
+
+	// All pairs in order of appearance as array(array('EUR', 3.5), ...), duplicates
+	// kept: parseMargins() lets the last one win, validateMarginRange() checks each.
+	private function matchMarginPairs($string) {
+		$pairs = array();
+
+		preg_match_all('/(?<![A-Za-z])' . self::MARGIN_PAIR . '/', $string, $matches, PREG_SET_ORDER);
+
+		foreach ($matches as $m) {
+			$pairs[] = array(strtoupper($m[1]), (float)str_replace(',', '.', $m[2]));
+		}
+
+		return $pairs;
 	}
 
 	// Strict check for the settings form: the whole value must be a list of
 	// pairs (one trailing comma allowed); empty means "no margins". Reads no config.
 	public function validateMargins($value) {
 		return is_string($value) && preg_match('/^\s*(?:' . self::MARGIN_PAIR . '(?:\s*,\s*' . self::MARGIN_PAIR . ')*\s*,?)?\s*$/', $value) === 1;
+	}
+
+	// Range check for the settings form, run after validateMargins(). The rate is
+	// multiplied by (1 + percent / 100): -100 zeroes it and anything lower makes
+	// it negative. Every pair counts, even one a later duplicate would override,
+	// so nothing like that is ever stored. No upper bound on purpose.
+	public function validateMarginRange($value) {
+		if (!is_string($value)) {
+			return false;
+		}
+
+		foreach ($this->matchMarginPairs($value) as $pair) {
+			if ($pair[1] <= -100) {
+				return false;
+			}
+		}
+
+		return true;
 	}
 
 	public function refresh($force = false) {
@@ -118,7 +148,15 @@ class ModelExtensionCurrencyNbk extends Model {
 
 			// Margin applies to foreign currencies only; the default must stay exactly 1.
 			if ($code !== $default && isset($margins[$code]) && $margins[$code] != 0) {
-				$value *= 1 + ($margins[$code] / 100);
+				$marked = $value * (1 + ($margins[$code] / 100));
+
+				// -100% or less (possibly saved before the form checked the range)
+				// would zero or negate prices; keep the official rate instead, which
+				// also repairs zeros written by older versions. Checked at the
+				// 8-digit DB precision, so a rate that rounds to 0 is refused too.
+				if ((float)sprintf('%.8f', $marked) > 0) {
+					$value = $marked;
+				}
 			}
 
 			$this->editValueByCode($code, $value);

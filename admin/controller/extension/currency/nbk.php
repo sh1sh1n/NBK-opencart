@@ -86,6 +86,8 @@ class ControllerExtensionCurrencyNbk extends Controller {
 		$this->load->model('extension/currency/nbk');
 		if (!$this->model_extension_currency_nbk->validateMargins($margins)) {
 			$this->error['margins'] = $this->language->get('error_margins');
+		} elseif (!$this->model_extension_currency_nbk->validateMarginRange($margins)) {
+			$this->error['margins'] = $this->language->get('error_margins_range');
 		}
 
 		return !$this->error;

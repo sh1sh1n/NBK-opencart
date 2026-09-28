@@ -441,6 +441,62 @@ foreach ($models as $side => $file) {
 	foreach (array('EUR:3,bad', 'bad', ':1', 'GBP:x', 'EUR:3;USD:2', 'EUR 3', 'EURO:3', 'EUR:3, 5', 'EUR:3USD:2', 'EUR:', 'EUR:3:4', ',EUR:3', 'EUR:1e2', array('EUR:3')) as $value) {
 		check($side . ': validateMargins rejects ' . show($value), $model->validateMargins($value) === false);
 	}
+
+	// -100% or less must never reach the DB: the official rate is written instead.
+	foreach (array('USD:-100', 'USD:-150') as $setting) {
+		list($model, $registry) = nbk_model($ns, array('currency_nbk_status' => 1, 'config_currency' => 'KZT', 'currency_nbk_margins' => $setting), $codes);
+		$result = $model->refresh();
+		$writes = $registry->get('db')->writes();
+		$expect = array('KZT' => '1.00000000', 'USD' => '0.00200000', 'EUR' => '0.00181818', 'AMD' => '0.80000000', 'RUB' => '0.18181818', 'CNY' => '0.01428571');
+		ksort($writes);
+		ksort($expect);
+		check($side . ': refresh with ' . $setting . ' returns true', $result === true, show($result));
+		check($side . ': refresh with ' . $setting . ' writes the official USD rate', $writes === $expect, show($writes));
+
+		$positive = $writes !== array();
+
+		foreach ($writes as $v) {
+			if (!((float)$v > 0)) {
+				$positive = false;
+			}
+		}
+
+		check($side . ': refresh with ' . $setting . ' writes only positive values', $positive, show($writes));
+	}
+
+	// Only the bad pair is dropped; EUR 1/550 * 1.1 = 0.002.
+	list($model, $registry) = nbk_model($ns, array('currency_nbk_status' => 1, 'config_currency' => 'KZT', 'currency_nbk_margins' => 'USD:-150,EUR:10'), $codes);
+	$result = $model->refresh();
+	$writes = $registry->get('db')->writes();
+	$expect = array('KZT' => '1.00000000', 'USD' => '0.00200000', 'EUR' => '0.00200000', 'AMD' => '0.80000000', 'RUB' => '0.18181818', 'CNY' => '0.01428571');
+	ksort($writes);
+	ksort($expect);
+	check($side . ': refresh drops only the out-of-range margin', $result === true && $writes === $expect, show($writes));
+
+	// Default USD: KZT 500 * 0 is refused, EUR 500/550 * 0.01 = 0.00909091 is kept.
+	list($model, $registry) = nbk_model($ns, array('currency_nbk_status' => 1, 'config_currency' => 'USD', 'currency_nbk_margins' => 'KZT:-100,EUR:-99'), $codes);
+	$result = $model->refresh();
+	$writes = $registry->get('db')->writes();
+	$expect = array('KZT' => '500.00000000', 'USD' => '1.00000000', 'EUR' => '0.00909091', 'AMD' => '400.00000000', 'RUB' => '90.90909091', 'CNY' => '7.14285714');
+	ksort($writes);
+	ksort($expect);
+	check($side . ': default USD, KZT:-100 refused, EUR:-99 applied', $result === true && $writes === $expect, show($writes));
+
+	// USD 1/500 * 0.0001 = 0.0000002 survives; * 0.000000001 rounds to 0 and is refused.
+	foreach (array('USD:-99,99' => '0.00000020', 'USD:-99.9999999' => '0.00200000') as $setting => $usd) {
+		list($model, $registry) = nbk_model($ns, array('currency_nbk_status' => 1, 'config_currency' => 'KZT', 'currency_nbk_margins' => $setting), $codes);
+		$result = $model->refresh();
+		$writes = $registry->get('db')->writes();
+		check($side . ': refresh with ' . $setting . ' writes USD ' . $usd, $result === true && isset($writes['USD']) && $writes['USD'] === $usd, show($writes));
+	}
+
+	foreach (array('', 'EUR:3,USD:2', 'AMD:-1,5', 'USD:-99,99') as $value) {
+		check($side . ': validateMarginRange accepts ' . show($value), $model->validateMarginRange($value) === true);
+	}
+
+	foreach (array('USD:-100', 'USD:-150', 'USD:-100,0', 'usd:-100%', 'EUR:3,USD:-100', 'USD:-150,USD:2', array('USD:-150')) as $value) {
+		check($side . ': validateMarginRange rejects ' . show($value), $model->validateMarginRange($value) === false);
+	}
 }
 
 // --- Catalog controller: the cron endpoint contract -------------------------
@@ -526,6 +582,27 @@ check('settings: array margins are rejected without warnings', $settings->calls 
 list($response, $settings) = nbk_admin_index('GET', array(), array('currency_nbk_margins' => 'EUR:3,bad'));
 $output = is_array($response->output) ? $response->output : array();
 check('settings: GET shows stored value without error', isset($output['error_margins'], $output['currency_nbk_margins']) && $output['error_margins'] === '' && $output['currency_nbk_margins'] === 'EUR:3,bad', show($output));
+
+// Well-formed but -100% or less: rejected with its own message, input kept.
+foreach (array('USD:-100', 'USD:-150') as $value) {
+	list($response, $settings) = nbk_admin_index('POST', array('currency_nbk_margins' => $value, 'currency_nbk_status' => '1'), array());
+	$output = is_array($response->output) ? $response->output : array();
+	check('settings: ' . $value . ' is rejected as out of range', $settings->calls === array() && $response->redirect === null && isset($output['error_margins'], $output['currency_nbk_margins']) && $output['error_margins'] === 'error_margins_range' && $output['currency_nbk_margins'] === $value, show(array($settings->calls, $response->redirect, $output)));
+}
+
+// Format is checked first, so a malformed value keeps the format message.
+list($response, $settings) = nbk_admin_index('POST', array('currency_nbk_margins' => 'EUR:3,bad', 'currency_nbk_status' => '1'), array());
+$output = is_array($response->output) ? $response->output : array();
+check('settings: format error wins over range error', isset($output['error_margins']) && $output['error_margins'] === 'error_margins', show($output));
+
+$post = array('currency_nbk_margins' => 'USD:-99,99', 'currency_nbk_status' => '1');
+list($response, $settings) = nbk_admin_index('POST', $post, array());
+check('settings: USD:-99,99 is in range and saved', $settings->calls === array(array('editSetting', 'currency_nbk', $post)) && $response->redirect !== null, show(array($settings->calls, $response->redirect)));
+
+// An out-of-range value already in the DB is shown as is; only saving validates it.
+list($response, $settings) = nbk_admin_index('GET', array(), array('currency_nbk_margins' => 'USD:-150'));
+$output = is_array($response->output) ? $response->output : array();
+check('settings: GET shows stored out-of-range value without error', isset($output['error_margins'], $output['currency_nbk_margins']) && $output['error_margins'] === '' && $output['currency_nbk_margins'] === 'USD:-150', show($output));
 
 // Twig in OC 3 does not autoescape, so the controller must hand over attribute-safe values.
 $x   = '"><b>x</b>';

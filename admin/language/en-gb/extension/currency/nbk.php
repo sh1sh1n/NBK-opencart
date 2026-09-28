@@ -22,6 +22,7 @@ $_['help_ip']          = 'Restrict the cron refresh URL to this single IP. Leave
 $_['error_permission'] = 'Warning: You do not have permission to modify NBK currency!';
 $_['error_ip']         = 'Invalid IP address!';
 $_['error_margins']    = 'Invalid markup format! Example: EUR:3,5,USD:2';
+$_['error_margins_range'] = 'Markup must be greater than -100%; otherwise, the exchange rate will become zero or negative!';
 
 // Margins
 $_['entry_margins']    = 'Currency markups (%)';
