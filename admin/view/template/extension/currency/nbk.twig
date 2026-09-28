@@ -53,6 +53,7 @@
             <label class="col-sm-2 control-label" for="input-margins">{{ entry_margins }}</label>
             <div class="col-sm-10">
               <input type="text" name="currency_nbk_margins" value="{{ currency_nbk_margins }}" placeholder="EUR:3,USD:2,RUB:5" id="input-margins" class="form-control"/>
+              {% if error_margins %}<div class="text-danger">{{ error_margins }}</div>{% endif %}
               <div class="text-muted">{{ help_margins }}</div>
             </div>
           </div>

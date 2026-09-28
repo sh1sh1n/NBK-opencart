@@ -21,8 +21,9 @@ $_['help_ip']          = 'Restrict the cron refresh URL to this single IP. Leave
 // Error
 $_['error_permission'] = 'Warning: You do not have permission to modify NBK currency!';
 $_['error_ip']         = 'Invalid IP address!';
+$_['error_margins']    = 'Invalid markup format! Example: EUR:3,5,USD:2';
 
 // Margins
-$_['entry_margins']    = 'Currency margins (%)';
-$_['help_margins']     = 'Per-currency surcharge added on top of the official rate to absorb conversion spread. Format: CODE:percent, comma-separated, e.g. EUR:3,USD:2,RUB:5. Currencies not listed use the exact official rate. The default currency is never marked up.';
+$_['entry_margins']    = 'Currency markups (%)';
+$_['help_margins']     = 'Per-currency markup added on top of the official rate to absorb conversion spread. Format: CODE:percentage, pairs separated by commas; decimals may use a dot or comma, e.g. EUR:3,5,USD:2,RUB:5. Currencies not listed use the exact official rate. The default currency is never marked up.';
 

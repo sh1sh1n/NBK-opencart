@@ -8,28 +8,34 @@ class ModelExtensionCurrencyNbk extends Model {
 		$this->cache->delete('currency');
 	}
 
-	// Parse the per-currency margin setting "EUR:3,USD:2,RUB:5" into ['EUR'=>3.0,...].
-	// Forgiving by design: bad/empty pairs are skipped, codes upper-cased, comma or
-	// dot accepted as decimal separator. Change the storage format here only.
+	// One "CODE:percent" pair of the margin setting "EUR:3,5,USD:2,RUB:5".
+	// A currency code never starts with a digit, so a comma followed by a digit
+	// always belongs to the number: pairs are matched over the whole string
+	// instead of splitting on commas, and both "3,5" and "3.5" work.
+	// "+", a leading dot (".5") and a trailing "%" stay allowed because the old
+	// explode-based parser accepted them and such values may already be stored.
+	private const MARGIN_PAIR = '([A-Za-z]{3})\s*:\s*([+-]?(?:\d+(?:[.,]\d+)?|\.\d+))%?';
+
+	// Parse the per-currency margin setting into array('EUR' => 3.5, ...).
+	// Forgiving by design (runs from cron): garbage between pairs is skipped,
+	// codes upper-cased, the last duplicate wins. The lookbehind keeps "EURO:3"
+	// or "XEUR:4" from yielding URO/EUR. Change the storage format here only.
 	private function parseMargins() {
 		$margins = array();
 
-		foreach (explode(',', (string)$this->config->get('currency_nbk_margins')) as $pair) {
-			$parts = explode(':', trim($pair));
+		preg_match_all('/(?<![A-Za-z])' . self::MARGIN_PAIR . '/', (string)$this->config->get('currency_nbk_margins'), $matches, PREG_SET_ORDER);
 
-			if (count($parts) !== 2) {
-				continue;
-			}
-
-			$code = strtoupper(trim($parts[0]));
-			$pct  = (float)str_replace(',', '.', trim($parts[1]));
-
-			if ($code !== '') {
-				$margins[$code] = $pct;
-			}
+		foreach ($matches as $m) {
+			$margins[strtoupper($m[1])] = (float)str_replace(',', '.', $m[2]);
 		}
 
 		return $margins;
+	}
+
+	// Strict check for the settings form: the whole value must be a list of
+	// pairs (one trailing comma allowed); empty means "no margins". Reads no config.
+	public function validateMargins($value) {
+		return is_string($value) && preg_match('/^\s*(?:' . self::MARGIN_PAIR . '(?:\s*,\s*' . self::MARGIN_PAIR . ')*\s*,?)?\s*$/', $value) === 1;
 	}
 
 	public function refresh($force = false) {

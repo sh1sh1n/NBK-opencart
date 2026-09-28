@@ -18,6 +18,7 @@ class ControllerExtensionCurrencyNbk extends Controller {
 
 		$data['error_warning'] = isset($this->error['warning']) ? $this->error['warning'] : '';
 		$data['error_ip']      = isset($this->error['ip']) ? $this->error['ip'] : '';
+		$data['error_margins'] = isset($this->error['margins']) ? $this->error['margins'] : '';
 
 		$data['breadcrumbs'] = array();
 
@@ -79,6 +80,12 @@ class ControllerExtensionCurrencyNbk extends Controller {
 			if (!filter_var($this->request->post['currency_nbk_ip'], FILTER_VALIDATE_IP)) {
 				$this->error['ip'] = $this->language->get('error_ip');
 			}
+		}
+
+		$margins = isset($this->request->post['currency_nbk_margins']) ? $this->request->post['currency_nbk_margins'] : '';
+		$this->load->model('extension/currency/nbk');
+		if (!$this->model_extension_currency_nbk->validateMargins($margins)) {
+			$this->error['margins'] = $this->language->get('error_margins');
 		}
 
 		return !$this->error;

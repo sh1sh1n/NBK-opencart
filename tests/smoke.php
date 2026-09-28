@@ -14,6 +14,7 @@ error_reporting(E_ALL);
 ini_set('display_errors', '1');
 
 define('DB_PREFIX', 'oc_');
+define('HTTPS_CATALOG', 'https://shop.test/');
 
 $root   = dirname(__DIR__);
 $issues = array();
@@ -153,6 +154,15 @@ class FakeLoader {
 	}
 
 	public function language($route) {}
+
+	public function controller($route) {
+		return '';
+	}
+
+	// Hands the template data back, so tests can inspect what the page shows.
+	public function view($route, $data = array()) {
+		return $data;
+	}
 }
 
 class FakeRequest {
@@ -164,9 +174,15 @@ class FakeRequest {
 class FakeResponse {
 	public $headers = array();
 	public $output = null;
+	public $redirect = null;
 
 	public function addHeader($header) {
 		$this->headers[] = $header;
+	}
+
+	// The real one exits; recording the URL is enough to tell "saved" apart.
+	public function redirect($url) {
+		$this->redirect = $url;
 	}
 
 	public function setOutput($output) {
@@ -188,6 +204,7 @@ class FakeNbkModel {
 class FakeRecorder {
 	public $calls = array();
 	public $groupId = 7;
+	public $permitted = true;
 
 	public function __call($method, $args) {
 		$this->calls[] = array_merge(array($method), $args);
@@ -197,6 +214,27 @@ class FakeRecorder {
 	public function getGroupId() {
 		return $this->groupId;
 	}
+
+	public function hasPermission($action, $route) {
+		return $this->permitted;
+	}
+}
+
+// Returns the key itself, so tests can assert which message was chosen.
+class FakeLanguage {
+	public function get($key) {
+		return $key;
+	}
+}
+
+class FakeUrl {
+	public function link($route, $args = '', $secure = false) {
+		return 'url:' . $route;
+	}
+}
+
+class FakeSession {
+	public $data = array('user_token' => 't');
 }
 
 class NbkFeed {
@@ -275,6 +313,30 @@ function nbk_parse_margins($model) {
 	return $method->invoke($model);
 }
 
+// Runs the admin settings page with the real admin model behind it.
+function nbk_admin_index($method, array $post, array $config) {
+	list($model) = nbk_model('NbkTest\\AdminModel', array(), array());
+	$settings = new FakeRecorder();
+
+	list($controller, $registry) = nbk_controller('NbkTest\\AdminController\\ControllerExtensionCurrencyNbk', array(
+		'config'                       => new FakeConfig($config),
+		'user'                         => new FakeRecorder(),
+		'document'                     => new FakeRecorder(),
+		'model_setting_setting'        => $settings,
+		'language'                     => new FakeLanguage(),
+		'url'                          => new FakeUrl(),
+		'session'                      => new FakeSession(),
+		'model_extension_currency_nbk' => $model,
+	));
+
+	$registry->get('request')->server['REQUEST_METHOD'] = $method;
+	$registry->get('request')->post = $post;
+
+	$controller->index();
+
+	return array($registry->get('response'), $settings);
+}
+
 $fixture = file_get_contents(__DIR__ . '/fixtures/rates_all.xml');
 $codes   = array('KZT', 'USD', 'EUR', 'AMD', 'RUB', 'CNY', 'GBP', 'XZR', 'XND', 'XQZ');
 
@@ -336,15 +398,49 @@ foreach ($models as $side => $file) {
 
 	NbkFeed::$response = $fixture;
 
-	// Margin parsing. Decimal-comma input ("EUR:3,5") is a known open bug,
-	// see tasks/002; it is deliberately not asserted here yet.
+	// Margin parsing.
 	list($model) = nbk_model($ns, array('currency_nbk_margins' => ' usd:2, EUR:3.5 ,bad,:1,GBP:x'), array());
 	$margins = nbk_parse_margins($model);
-	check($side . ': parseMargins skips bad pairs, upper-cases codes', $margins === array('USD' => 2.0, 'EUR' => 3.5, 'GBP' => 0.0), show($margins));
+	check($side . ': parseMargins skips bad pairs, upper-cases codes', $margins === array('USD' => 2.0, 'EUR' => 3.5), show($margins));
 
 	list($model) = nbk_model($ns, array(), array());
 	$margins = nbk_parse_margins($model);
 	check($side . ': parseMargins with no setting is empty', $margins === array(), show($margins));
+
+	list($model) = nbk_model($ns, array('currency_nbk_margins' => 'EUR:3,5,USD:2'), array());
+	$margins = nbk_parse_margins($model);
+	check($side . ': parseMargins decimal comma', $margins === array('EUR' => 3.5, 'USD' => 2.0), show($margins));
+
+	// Values saved before the fix must keep their meaning.
+	list($model) = nbk_model($ns, array('currency_nbk_margins' => 'EUR:3,USD:2'), array());
+	$margins = nbk_parse_margins($model);
+	check($side . ': parseMargins stored format unchanged', $margins === array('EUR' => 3.0, 'USD' => 2.0), show($margins));
+
+	list($model) = nbk_model($ns, array('currency_nbk_margins' => ' eur : 3,5 , usd:2.25, amd:-1,5, RUB:+4, CNY:.5, GBP:7% '), array());
+	$margins = nbk_parse_margins($model);
+	check($side . ': parseMargins edge cases', $margins === array('EUR' => 3.5, 'USD' => 2.25, 'AMD' => -1.5, 'RUB' => 4.0, 'CNY' => 0.5, 'GBP' => 7.0), show($margins));
+
+	list($model) = nbk_model($ns, array('currency_nbk_margins' => 'EURO:3,XEUR:4,EUR:1'), array());
+	$margins = nbk_parse_margins($model);
+	check($side . ': parseMargins whole codes only', $margins === array('EUR' => 1.0), show($margins));
+
+	// Default KZT: USD 1/500 * 1.025, EUR 1/550 * 1.035; the rest untouched.
+	list($model, $registry) = nbk_model($ns, array('currency_nbk_status' => 1, 'config_currency' => 'KZT', 'currency_nbk_margins' => 'EUR:3,5,USD:2,5'), $codes);
+	$result = $model->refresh();
+	$writes = $registry->get('db')->writes();
+	$expect = array('KZT' => '1.00000000', 'USD' => '0.00205000', 'EUR' => '0.00188182', 'AMD' => '0.80000000', 'RUB' => '0.18181818', 'CNY' => '0.01428571');
+	ksort($writes);
+	ksort($expect);
+	check($side . ': refresh with decimal-comma margins', $result === true && $writes === $expect, show($writes));
+
+	// Form validation is strict, unlike the runtime parser.
+	foreach (array('', '   ', 'EUR:3,USD:2', 'EUR:3,5,USD:2', ' eur : 3,5 , usd:2.25 ', 'AMD:-1,5', 'RUB:+4', 'CNY:.5', 'GBP:7%', 'EUR:3,', 'EUR:3,5,') as $value) {
+		check($side . ': validateMargins accepts ' . show($value), $model->validateMargins($value) === true);
+	}
+
+	foreach (array('EUR:3,bad', 'bad', ':1', 'GBP:x', 'EUR:3;USD:2', 'EUR 3', 'EURO:3', 'EUR:3, 5', 'EUR:3USD:2', 'EUR:', 'EUR:3:4', ',EUR:3', 'EUR:1e2', array('EUR:3')) as $value) {
+		check($side . ': validateMargins rejects ' . show($value), $model->validateMargins($value) === false);
+	}
 }
 
 // --- Catalog controller: the cron endpoint contract -------------------------
@@ -410,6 +506,26 @@ check('install: grants access and modify to the installer group', $groups->calls
 $events->calls = array();
 $controller->uninstall();
 check('uninstall: removes the event', $events->calls === array(array('deleteEventByCode', 'currency_nbk')), show($events->calls));
+
+// --- Admin controller: settings form validation -----------------------------
+
+$post = array('currency_nbk_margins' => 'EUR:3,5,USD:2', 'currency_nbk_status' => '1');
+list($response, $settings) = nbk_admin_index('POST', $post, array());
+$output = is_array($response->output) ? $response->output : array();
+check('settings: valid margins are saved', $settings->calls === array(array('editSetting', 'currency_nbk', $post)) && $response->redirect !== null && isset($output['error_margins']) && $output['error_margins'] === '', show(array($settings->calls, $response->redirect, $output)));
+
+list($response, $settings) = nbk_admin_index('POST', array('currency_nbk_margins' => 'EUR:3,bad', 'currency_nbk_status' => '1'), array());
+$output = is_array($response->output) ? $response->output : array();
+check('settings: invalid margins are rejected', $settings->calls === array() && $response->redirect === null && isset($output['error_margins'], $output['currency_nbk_margins']) && $output['error_margins'] === 'error_margins' && $output['currency_nbk_margins'] === 'EUR:3,bad', show(array($settings->calls, $response->redirect, $output)));
+
+list($response, $settings) = nbk_admin_index('POST', array('currency_nbk_margins' => array('x'), 'currency_nbk_status' => '1'), array());
+$output = is_array($response->output) ? $response->output : array();
+check('settings: array margins are rejected without warnings', $settings->calls === array() && isset($output['error_margins']) && $output['error_margins'] === 'error_margins', show(array($settings->calls, $output)));
+
+// A bad value already in the DB is shown as is; only saving validates it.
+list($response, $settings) = nbk_admin_index('GET', array(), array('currency_nbk_margins' => 'EUR:3,bad'));
+$output = is_array($response->output) ? $response->output : array();
+check('settings: GET shows stored value without error', isset($output['error_margins'], $output['currency_nbk_margins']) && $output['error_margins'] === '' && $output['currency_nbk_margins'] === 'EUR:3,bad', show($output));
 
 $fake = new FakeNbkModel();
 list($controller) = nbk_controller('NbkTest\\AdminController\\ControllerExtensionCurrencyNbk', array(
