@@ -73,17 +73,21 @@ class ControllerExtensionCurrencyNbk extends Controller {
 	// A forged name[]=x turns a field into an array; editSetting() would store it
 	// as JSON, and the model and cron would later read an array where they expect
 	// a string. So non-scalars are rejected before any other check sees them.
+	// Status only ever comes from a 0/1 select, so anything else is a forged request
+	// and is rejected rather than coerced: stored junk would later read as "enabled".
+	// The ip check uses !== '' instead of empty(): empty('0') is true, so '0' used to
+	// be saved and cron then treated it as a lock that no address can ever match.
 	protected function validate() {
 		if (!$this->user->hasPermission('modify', 'extension/currency/nbk')) {
 			$this->error['warning'] = $this->language->get('error_permission');
-		} elseif (isset($this->request->post['currency_nbk_status']) && !is_scalar($this->request->post['currency_nbk_status'])) {
+		} elseif (isset($this->request->post['currency_nbk_status']) && !in_array($this->request->post['currency_nbk_status'], array('0', '1'), true)) {
 			$this->error['warning'] = $this->language->get('error_status');
 		}
 
 		$ip = isset($this->request->post['currency_nbk_ip']) ? $this->request->post['currency_nbk_ip'] : '';
 		if (!is_scalar($ip)) {
 			$this->error['ip'] = $this->language->get('error_ip');
-		} elseif (!empty($ip) && !filter_var((string)$ip, FILTER_VALIDATE_IP)) {
+		} elseif ((string)$ip !== '' && !filter_var((string)$ip, FILTER_VALIDATE_IP)) {
 			$this->error['ip'] = $this->language->get('error_ip');
 		}
 

@@ -684,6 +684,8 @@ $cron = array(
 	'IP match (trimmed)'     => array(array('currency_nbk_status' => 1, 'currency_nbk_ip' => ' 10.0.0.1 '), '10.0.0.1', true, array(), 'NBK: ok', true),
 	'no IP lock, ok'         => array(array('currency_nbk_status' => 1), '192.0.2.5', true, array(), 'NBK: ok', true),
 	'no IP lock, failed'     => array(array('currency_nbk_status' => 1), '192.0.2.5', false, array('HTTP/1.1 502 Bad Gateway'), 'NBK: failed', true),
+	// An old '0' does not open cron (fail-closed); re-saving the form fixes it.
+	'IP 0 stored before the fix' => array(array('currency_nbk_status' => 1, 'currency_nbk_ip' => '0'), '10.0.0.1', true, array('HTTP/1.1 403 Forbidden'), 'NBK: forbidden', false),
 );
 
 foreach ($cron as $label => $case) {
@@ -843,6 +845,7 @@ $status = array(
 	'stored string 0'   => array('GET', array(), array('currency_nbk_status' => '0'), '0'),
 	'not stored'        => array('GET', array(), array(), '0'),
 	'POST 0, bad input' => array('POST', array('currency_nbk_status' => '0', 'currency_nbk_margins' => 'EUR:3,bad'), array(), '0'),
+	'POST abc'          => array('POST', array('currency_nbk_status' => 'abc', 'currency_nbk_margins' => 'EUR:3'), array(), '1'),
 );
 
 foreach ($status as $label => $case) {
@@ -872,6 +875,44 @@ check('settings: nested arrays in all three fields are rejected', $settings->cal
 $post = array('currency_nbk_status' => '0', 'currency_nbk_ip' => '10.0.0.1', 'currency_nbk_margins' => 'EUR:3,5');
 list($response, $settings) = nbk_admin_index('POST', $post, array());
 check('settings: scalar POST is saved exactly as sent', $settings->calls === array(array('editSetting', 'currency_nbk', $post)) && $response->redirect !== null, show(array($settings->calls, $response->redirect)));
+
+// Status comes from a 0/1 select, so any other scalar is a forged request.
+foreach (array('abc', '5', '', '01', ' 1', 'on', 'true') as $value) {
+	list($response, $settings) = nbk_admin_index('POST', array('currency_nbk_status' => $value, 'currency_nbk_ip' => '', 'currency_nbk_margins' => 'EUR:3'), array());
+	$output = is_array($response->output) ? $response->output : array();
+	check('settings: status ' . show($value) . ' is rejected and not saved', $settings->calls === array() && $response->redirect === null && isset($output['error_warning'], $output['error_ip'], $output['error_margins']) && $output['error_warning'] === 'error_status' && $output['error_ip'] === '' && $output['error_margins'] === '', show(array($settings->calls, $response->redirect, $output)));
+}
+
+foreach (array('0', '1') as $value) {
+	$post = array('currency_nbk_status' => $value, 'currency_nbk_ip' => '', 'currency_nbk_margins' => 'EUR:3');
+	list($response, $settings) = nbk_admin_index('POST', $post, array());
+	check('settings: status ' . show($value) . ' is saved exactly as sent', $settings->calls === array(array('editSetting', 'currency_nbk', $post)) && $response->redirect !== null, show(array($settings->calls, $response->redirect)));
+}
+
+list($response, $settings) = nbk_admin_index('POST', array('currency_nbk_status' => 'abc', 'currency_nbk_ip' => '', 'currency_nbk_margins' => 'EUR:3'), array(), false);
+$output = is_array($response->output) ? $response->output : array();
+check('settings: permission error wins over a bad scalar status', $settings->calls === array() && isset($output['error_warning']) && $output['error_warning'] === 'error_permission', show(array($settings->calls, $output)));
+
+// empty('0') is true, so '0' used to be saved and cron read it as an unmatchable lock.
+list($response, $settings) = nbk_admin_index('POST', array('currency_nbk_status' => '1', 'currency_nbk_ip' => '0', 'currency_nbk_margins' => 'EUR:3'), array());
+$output = is_array($response->output) ? $response->output : array();
+check('settings: ip \'0\' is rejected, so cron is never silently locked', $settings->calls === array() && $response->redirect === null && isset($output['error_ip'], $output['error_warning'], $output['error_margins'], $output['currency_nbk_ip']) && $output['error_ip'] === 'error_ip' && $output['error_warning'] === '' && $output['error_margins'] === '' && $output['currency_nbk_ip'] === '0', show(array($settings->calls, $response->redirect, $output)));
+
+foreach (array('00', '0.0', 'abc') as $value) {
+	list($response, $settings) = nbk_admin_index('POST', array('currency_nbk_status' => '1', 'currency_nbk_ip' => $value, 'currency_nbk_margins' => 'EUR:3'), array());
+	$output = is_array($response->output) ? $response->output : array();
+	check('settings: ip ' . show($value) . ' is rejected', $settings->calls === array() && isset($output['error_ip']) && $output['error_ip'] === 'error_ip', show(array($settings->calls, $output)));
+}
+
+foreach (array('', '10.0.0.1', '2001:db8::1') as $value) {
+	$post = array('currency_nbk_status' => '1', 'currency_nbk_ip' => $value, 'currency_nbk_margins' => 'EUR:3');
+	list($response, $settings) = nbk_admin_index('POST', $post, array());
+	check('settings: ip ' . show($value) . ' is saved exactly as sent', $settings->calls === array(array('editSetting', 'currency_nbk', $post)) && $response->redirect !== null, show(array($settings->calls, $response->redirect)));
+}
+
+list($response, $settings) = nbk_admin_index('POST', array('currency_nbk_status' => 'abc', 'currency_nbk_ip' => '0', 'currency_nbk_margins' => 'EUR:3'), array());
+$output = is_array($response->output) ? $response->output : array();
+check('settings: bad status and ip \'0\' are reported together', $settings->calls === array() && isset($output['error_warning'], $output['error_ip'], $output['error_margins']) && $output['error_warning'] === 'error_status' && $output['error_ip'] === 'error_ip' && $output['error_margins'] === '', show(array($settings->calls, $output)));
 
 $fake = new FakeNbkModel();
 list($controller) = nbk_controller('NbkTest\\AdminController\\ControllerExtensionCurrencyNbk', array(
