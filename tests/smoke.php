@@ -4,7 +4,9 @@
 // Each module file is loaded into its own namespace. Unqualified curl_exec()
 // then resolves to the stub below and serves tests/fixtures/rates_all.xml,
 // while curl_init/curl_setopt/curl_close stay real, so their deprecations on
-// newer PHP still surface. Any notice, warning or deprecation fails the run:
+// newer PHP still surface. Unqualified filter_var() resolves to a pass-through
+// wrapper that counts non-scalar arguments in NbkProbe, so tests can prove a
+// forged array never reaches it. Any notice, warning or deprecation fails the run:
 // one codebase has to stay clean on every PHP from 7.4 to 8.5.
 //
 // Must itself run on PHP 7.4: no match, nullsafe, named args, str_contains.
@@ -242,6 +244,27 @@ class NbkFeed {
 	public static $calls = 0;
 }
 
+// Counts non-scalar values that reached the namespaced filter_var() wrapper.
+class NbkProbe {
+	public static $filterVarNonScalar = 0;
+}
+
+// Wraps the real admin model and records every call as array(method, args...),
+// so tests can see what the controller hands to the validators.
+class NbkModelSpy {
+	public $calls = array();
+	private $inner;
+
+	public function __construct($inner) {
+		$this->inner = $inner;
+	}
+
+	public function __call($method, $args) {
+		$this->calls[] = array_merge(array($method), $args);
+		return call_user_func_array(array($this->inner, $method), $args);
+	}
+}
+
 // --- Helpers ----------------------------------------------------------------
 
 // The prelude is glued onto the "<?php" line, so line numbers stay intact.
@@ -256,7 +279,8 @@ function nbk_load($file, $namespace) {
 	}
 
 	file_put_contents($target, '<?php namespace ' . $namespace . '; use Model; use Controller;'
-		. ' function curl_exec($handle) { \NbkFeed::$calls++; return \NbkFeed::$response; } '
+		. ' function curl_exec($handle) { \NbkFeed::$calls++; return \NbkFeed::$response; }'
+		. ' function filter_var($value, $filter = FILTER_DEFAULT, $options = 0) { if (!is_scalar($value)) { \NbkProbe::$filterVarNonScalar++; } return \filter_var($value, $filter, $options); } '
 		. $source);
 
 	require $target;
@@ -313,20 +337,40 @@ function nbk_parse_margins($model) {
 	return $method->invoke($model);
 }
 
-// Runs the admin settings page with the real admin model behind it.
-function nbk_admin_index($method, array $post, array $config) {
+// Calls from a spy log that got at least one non-scalar argument.
+function nbk_non_scalar_calls(array $calls) {
+	$found = array();
+
+	foreach ($calls as $call) {
+		foreach (array_slice($call, 1) as $arg) {
+			if (!is_scalar($arg)) {
+				$found[] = $call;
+				break;
+			}
+		}
+	}
+
+	return $found;
+}
+
+// Runs the admin settings page with the real admin model behind a spy.
+function nbk_admin_index($method, array $post, array $config, $permitted = true) {
 	list($model) = nbk_model('NbkTest\\AdminModel', array(), array());
 	$settings = new FakeRecorder();
+	$user     = new FakeRecorder();
+	$spy      = new NbkModelSpy($model);
+
+	$user->permitted = $permitted;
 
 	list($controller, $registry) = nbk_controller('NbkTest\\AdminController\\ControllerExtensionCurrencyNbk', array(
 		'config'                       => new FakeConfig($config),
-		'user'                         => new FakeRecorder(),
+		'user'                         => $user,
 		'document'                     => new FakeRecorder(),
 		'model_setting_setting'        => $settings,
 		'language'                     => new FakeLanguage(),
 		'url'                          => new FakeUrl(),
 		'session'                      => new FakeSession(),
-		'model_extension_currency_nbk' => $model,
+		'model_extension_currency_nbk' => $spy,
 	));
 
 	$registry->get('request')->server['REQUEST_METHOD'] = $method;
@@ -334,7 +378,7 @@ function nbk_admin_index($method, array $post, array $config) {
 
 	$controller->index();
 
-	return array($registry->get('response'), $settings);
+	return array($registry->get('response'), $settings, $spy);
 }
 
 $fixture = file_get_contents(__DIR__ . '/fixtures/rates_all.xml');
@@ -642,6 +686,50 @@ list($response, $settings) = nbk_admin_index('GET', array(), array('currency_nbk
 $output = is_array($response->output) ? $response->output : array();
 check('settings: invalid UTF-8 is substituted the same on every PHP', isset($output['currency_nbk_margins']) && $output['currency_nbk_margins'] === "EUR\xEF\xBF\xBD", show($output));
 
+// A forged currency_nbk_status[]=1 must not be stored as a JSON array.
+$post = array('currency_nbk_status' => array('1'), 'currency_nbk_ip' => '', 'currency_nbk_margins' => 'EUR:3');
+list($response, $settings) = nbk_admin_index('POST', $post, array());
+$output = is_array($response->output) ? $response->output : array();
+check('settings: array status is rejected and not saved', $settings->calls === array() && $response->redirect === null && isset($output['error_warning'], $output['error_ip'], $output['error_margins']) && $output['error_warning'] === 'error_status' && $output['error_ip'] === '' && $output['error_margins'] === '', show(array($settings->calls, $response->redirect, $output)));
+
+$status = array(
+	// label => array(method, post, config, expected)
+	'POST array'        => array('POST', $post, array(), '1'),
+	'stored array'      => array('GET', array(), array('currency_nbk_status' => array('1')), '1'),
+	'stored int 1'      => array('GET', array(), array('currency_nbk_status' => 1), '1'),
+	'stored string 0'   => array('GET', array(), array('currency_nbk_status' => '0'), '0'),
+	'not stored'        => array('GET', array(), array(), '0'),
+	'POST 0, bad input' => array('POST', array('currency_nbk_status' => '0', 'currency_nbk_margins' => 'EUR:3,bad'), array(), '0'),
+);
+
+foreach ($status as $label => $case) {
+	list($response, $settings) = nbk_admin_index($case[0], $case[1], $case[2]);
+	$output = is_array($response->output) ? $response->output : array();
+	check('settings: status reaches the template as \'0\'/\'1\', never an array (' . $label . ')', isset($output['currency_nbk_status']) && $output['currency_nbk_status'] === $case[3], show($output));
+}
+
+list($response, $settings) = nbk_admin_index('POST', $post, array(), false);
+$output = is_array($response->output) ? $response->output : array();
+check('settings: permission error wins over array status', $settings->calls === array() && isset($output['error_warning']) && $output['error_warning'] === 'error_permission', show(array($settings->calls, $output)));
+
+$probe = NbkProbe::$filterVarNonScalar;
+list($response, $settings) = nbk_admin_index('POST', array('currency_nbk_status' => '1', 'currency_nbk_ip' => array('10.0.0.1'), 'currency_nbk_margins' => 'EUR:3'), array());
+$output = is_array($response->output) ? $response->output : array();
+check('settings: array ip is rejected without reaching filter_var', $settings->calls === array() && isset($output['error_ip'], $output['error_margins'], $output['error_warning'], $output['currency_nbk_ip']) && $output['error_ip'] === 'error_ip' && $output['error_margins'] === '' && $output['error_warning'] === '' && $output['currency_nbk_ip'] === '' && NbkProbe::$filterVarNonScalar === $probe, show(array($settings->calls, NbkProbe::$filterVarNonScalar - $probe, $output)));
+
+list($response, $settings, $spy) = nbk_admin_index('POST', array('currency_nbk_status' => '1', 'currency_nbk_ip' => '10.0.0.1', 'currency_nbk_margins' => array('EUR:3')), array());
+$output = is_array($response->output) ? $response->output : array();
+check('settings: array margins never reach the model validators', $settings->calls === array() && isset($output['error_margins'], $output['error_ip']) && $output['error_margins'] === 'error_margins' && $output['error_ip'] === '' && nbk_non_scalar_calls($spy->calls) === array(), show(array($settings->calls, $spy->calls, $output)));
+
+$probe = NbkProbe::$filterVarNonScalar;
+list($response, $settings, $spy) = nbk_admin_index('POST', array('currency_nbk_status' => array(array('1')), 'currency_nbk_ip' => array(array('x')), 'currency_nbk_margins' => array('a' => array('b'))), array());
+$output = is_array($response->output) ? $response->output : array();
+check('settings: nested arrays in all three fields are rejected', $settings->calls === array() && isset($output['error_warning'], $output['error_ip'], $output['error_margins']) && $output['error_warning'] === 'error_status' && $output['error_ip'] === 'error_ip' && $output['error_margins'] === 'error_margins' && NbkProbe::$filterVarNonScalar === $probe && nbk_non_scalar_calls($spy->calls) === array(), show(array($settings->calls, NbkProbe::$filterVarNonScalar - $probe, $spy->calls, $output)));
+
+$post = array('currency_nbk_status' => '0', 'currency_nbk_ip' => '10.0.0.1', 'currency_nbk_margins' => 'EUR:3,5');
+list($response, $settings) = nbk_admin_index('POST', $post, array());
+check('settings: scalar POST is saved exactly as sent', $settings->calls === array(array('editSetting', 'currency_nbk', $post)) && $response->redirect !== null, show(array($settings->calls, $response->redirect)));
+
 $fake = new FakeNbkModel();
 list($controller) = nbk_controller('NbkTest\\AdminController\\ControllerExtensionCurrencyNbk', array(
 	'config'                       => new FakeConfig(array()),
@@ -655,6 +743,8 @@ $controller->currency();
 check('currency(): runs the NBK refresh (fork compatibility)', $fake->calls === 2, 'calls=' . $fake->calls);
 
 // --- PHP diagnostics --------------------------------------------------------
+
+check('filter_var never received a non-scalar during the run', NbkProbe::$filterVarNonScalar === 0, 'count=' . NbkProbe::$filterVarNonScalar);
 
 restore_error_handler();
 

@@ -52,11 +52,10 @@ class ControllerExtensionCurrencyNbk extends Controller {
 			$data['currency_nbk_ip'] = $this->escapeAttr($this->config->get('currency_nbk_ip'));
 		}
 
-		if (isset($this->request->post['currency_nbk_status'])) {
-			$data['currency_nbk_status'] = $this->request->post['currency_nbk_status'];
-		} else {
-			$data['currency_nbk_status'] = $this->config->get('currency_nbk_status');
-		}
+		// Same rule as the !config->get('currency_nbk_status') check in the model and
+		// cron, so the select shows what the module really does and Twig never gets an array.
+		$status = isset($this->request->post['currency_nbk_status']) ? $this->request->post['currency_nbk_status'] : $this->config->get('currency_nbk_status');
+		$data['currency_nbk_status'] = empty($status) ? '0' : '1';
 
 		if (isset($this->request->post['currency_nbk_margins'])) {
 			$data['currency_nbk_margins'] = $this->escapeAttr($this->request->post['currency_nbk_margins']);
@@ -71,23 +70,34 @@ class ControllerExtensionCurrencyNbk extends Controller {
 		$this->response->setOutput($this->load->view('extension/currency/nbk', $data));
 	}
 
+	// A forged name[]=x turns a field into an array; editSetting() would store it
+	// as JSON, and the model and cron would later read an array where they expect
+	// a string. So non-scalars are rejected before any other check sees them.
 	protected function validate() {
 		if (!$this->user->hasPermission('modify', 'extension/currency/nbk')) {
 			$this->error['warning'] = $this->language->get('error_permission');
+		} elseif (isset($this->request->post['currency_nbk_status']) && !is_scalar($this->request->post['currency_nbk_status'])) {
+			$this->error['warning'] = $this->language->get('error_status');
 		}
 
-		if (!empty($this->request->post['currency_nbk_ip'])) {
-			if (!filter_var($this->request->post['currency_nbk_ip'], FILTER_VALIDATE_IP)) {
-				$this->error['ip'] = $this->language->get('error_ip');
-			}
+		$ip = isset($this->request->post['currency_nbk_ip']) ? $this->request->post['currency_nbk_ip'] : '';
+		if (!is_scalar($ip)) {
+			$this->error['ip'] = $this->language->get('error_ip');
+		} elseif (!empty($ip) && !filter_var((string)$ip, FILTER_VALIDATE_IP)) {
+			$this->error['ip'] = $this->language->get('error_ip');
 		}
 
 		$margins = isset($this->request->post['currency_nbk_margins']) ? $this->request->post['currency_nbk_margins'] : '';
-		$this->load->model('extension/currency/nbk');
-		if (!$this->model_extension_currency_nbk->validateMargins($margins)) {
+		if (!is_scalar($margins)) {
 			$this->error['margins'] = $this->language->get('error_margins');
-		} elseif (!$this->model_extension_currency_nbk->validateMarginRange($margins)) {
-			$this->error['margins'] = $this->language->get('error_margins_range');
+		} else {
+			$margins = (string)$margins;
+			$this->load->model('extension/currency/nbk');
+			if (!$this->model_extension_currency_nbk->validateMargins($margins)) {
+				$this->error['margins'] = $this->language->get('error_margins');
+			} elseif (!$this->model_extension_currency_nbk->validateMarginRange($margins)) {
+				$this->error['margins'] = $this->language->get('error_margins_range');
+			}
 		}
 
 		return !$this->error;
