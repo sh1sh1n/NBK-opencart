@@ -26,6 +26,7 @@
       </div>
       <div class="panel-body">
         <div class="alert alert-info">{{ text_edit|raw }}</div>
+        {# ip, margins and cron arrive HTML-escaped from the controller (autoescape is off in OC 3); adding |e here would double-escape them. #}
         <form action="{{ action }}" method="post" enctype="multipart/form-data" id="form-currency" class="form-horizontal">
           <div class="form-group">
             <label class="col-sm-2 control-label" for="input-status">{{ entry_status }}</label>

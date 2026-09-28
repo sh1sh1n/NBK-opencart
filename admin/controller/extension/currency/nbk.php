@@ -44,12 +44,12 @@ class ControllerExtensionCurrencyNbk extends Controller {
 		$data['text_edit'] = str_replace('%1', $this->url->link('localisation/currency', 'user_token=' . $this->session->data['user_token'], true), $data['text_edit']);
 		$data['text_edit'] = str_replace('%2', $this->url->link('setting/store', 'user_token=' . $this->session->data['user_token'], true), $data['text_edit']);
 
-		$data['currency_nbk_cron'] = 'curl -s &quot;' . HTTPS_CATALOG . 'index.php?route=extension/currency/nbk/refresh&quot;';
+		$data['currency_nbk_cron'] = $this->escapeAttr('curl -s "' . HTTPS_CATALOG . 'index.php?route=extension/currency/nbk/refresh"');
 
 		if (isset($this->request->post['currency_nbk_ip'])) {
-			$data['currency_nbk_ip'] = $this->request->post['currency_nbk_ip'];
+			$data['currency_nbk_ip'] = $this->escapeAttr($this->request->post['currency_nbk_ip']);
 		} else {
-			$data['currency_nbk_ip'] = (string)$this->config->get('currency_nbk_ip');
+			$data['currency_nbk_ip'] = $this->escapeAttr($this->config->get('currency_nbk_ip'));
 		}
 
 		if (isset($this->request->post['currency_nbk_status'])) {
@@ -59,9 +59,9 @@ class ControllerExtensionCurrencyNbk extends Controller {
 		}
 
 		if (isset($this->request->post['currency_nbk_margins'])) {
-			$data['currency_nbk_margins'] = $this->request->post['currency_nbk_margins'];
+			$data['currency_nbk_margins'] = $this->escapeAttr($this->request->post['currency_nbk_margins']);
 		} else {
-			$data['currency_nbk_margins'] = (string)$this->config->get('currency_nbk_margins');
+			$data['currency_nbk_margins'] = $this->escapeAttr($this->config->get('currency_nbk_margins'));
 		}
 
 		$data['header']      = $this->load->controller('common/header');
@@ -89,6 +89,19 @@ class ControllerExtensionCurrencyNbk extends Controller {
 		}
 
 		return !$this->error;
+	}
+
+	// Twig in OC 3 runs with autoescape off, so attribute values are escaped here.
+	// OC Request already applies htmlspecialchars(ENT_COMPAT) to POST and editSetting()
+	// stores that form, so decode first: this keeps the function idempotent.
+	// Flags are explicit because the defaults differ between 7.4 and 8.1+.
+	// Non-scalars become '' since htmlspecialchars(array) throws TypeError on 8.x.
+	private function escapeAttr($value) {
+		if (!is_scalar($value)) {
+			return '';
+		}
+
+		return htmlspecialchars(html_entity_decode((string)$value, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8'), ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8');
 	}
 
 	public function install() {

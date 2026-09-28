@@ -1,6 +1,6 @@
 # 003 — Значения настроек выводятся в шаблон без экранирования (XSS)
 
-- **Статус:** open
+- **Статус:** done
 - **Приоритет:** средний. Уязвимость есть только в админке, но это stored XSS между администраторами.
 - **Файлы:** `admin/view/template/extension/currency/nbk.twig:47`, `:55`; `admin/controller/extension/currency/nbk.php:46–64`
 
@@ -35,3 +35,23 @@ Twig в OpenCart 3.0.x создаётся с `autoescape => false`: это ви�
 - Команда cron на странице осталась прежней:
   `curl -s "https://…/index.php?route=extension/currency/nbk/refresh"`.
 - `tests/run.sh` → PASS.
+
+## Закрыто
+- Экранирование сделано в контроллере, в `private function escapeAttr()`:
+  сначала `html_entity_decode`, потом `htmlspecialchars`, оба с флагами
+  `ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8'`. Decode нужен потому, что
+  `Request::clean()` в OC уже экранирует POST, а `editSetting()` сохраняет
+  эту форму: простой `|e` в шаблоне дал бы `&amp;quot;`. Не-скаляры
+  выводятся как `''`.
+- Через хелпер идут ip и margins (ветки POST и config) и cron. Cron теперь
+  собирается с обычными `"`, для пользователя строка не изменилась.
+- В шаблоне добавлен только Twig-комментарий, выводы остались без фильтров.
+  Это закрепляет static-проверка «twig prints settings values unfiltered
+  (escaped in controller)».
+- Изменены 4 файла: admin-контроллер, twig, `tests/smoke.php` (+9
+  проверок), `tests/static.php` (+1). Проверка мутацией: на старом
+  контроллере 5 из 9 новых smoke-проверок падают.
+- `tests/run.sh` → PASS на PHP 7.4.33, 8.1.34, 8.3.35, 8.5.11, по 119
+  проверок smoke; 8.2 и 8.4 не установлены. Codex (CLI, read-only)
+  замечаний по коду не нашёл. Переустанавливать модуль не нужно.
+- Задача 005 частично закрыта: массив из POST в `$data` больше не попадает.

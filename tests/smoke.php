@@ -527,6 +527,44 @@ list($response, $settings) = nbk_admin_index('GET', array(), array('currency_nbk
 $output = is_array($response->output) ? $response->output : array();
 check('settings: GET shows stored value without error', isset($output['error_margins'], $output['currency_nbk_margins']) && $output['error_margins'] === '' && $output['currency_nbk_margins'] === 'EUR:3,bad', show($output));
 
+// Twig in OC 3 does not autoescape, so the controller must hand over attribute-safe values.
+$x   = '"><b>x</b>';
+$esc = '&quot;&gt;&lt;b&gt;x&lt;/b&gt;';
+
+list($response, $settings) = nbk_admin_index('POST', array('currency_nbk_ip' => $x, 'currency_nbk_margins' => $x, 'currency_nbk_status' => '1'), array());
+$output = is_array($response->output) ? $response->output : array();
+check('settings: POST markup in ip and margins is escaped for the attribute', $settings->calls === array() && isset($output['error_ip'], $output['error_margins'], $output['currency_nbk_ip'], $output['currency_nbk_margins']) && $output['error_ip'] === 'error_ip' && $output['error_margins'] === 'error_margins' && $output['currency_nbk_ip'] === '&quot;&gt;&lt;b&gt;x&lt;/b&gt;' && $output['currency_nbk_margins'] === '&quot;&gt;&lt;b&gt;x&lt;/b&gt;', show(array($settings->calls, $output)));
+
+// OC Request already runs POST through htmlspecialchars; that must not become &amp;quot;.
+list($response, $settings) = nbk_admin_index('POST', array('currency_nbk_ip' => $esc, 'currency_nbk_margins' => $esc, 'currency_nbk_status' => '1'), array());
+$output = is_array($response->output) ? $response->output : array();
+check('settings: pre-escaped POST (as OC Request delivers it) is not double-escaped', isset($output['currency_nbk_ip'], $output['currency_nbk_margins']) && $output['currency_nbk_ip'] === '&quot;&gt;&lt;b&gt;x&lt;/b&gt;' && $output['currency_nbk_margins'] === '&quot;&gt;&lt;b&gt;x&lt;/b&gt;', show($output));
+
+list($response, $settings) = nbk_admin_index('GET', array(), array('currency_nbk_ip' => $x, 'currency_nbk_margins' => $esc));
+$output = is_array($response->output) ? $response->output : array();
+check('settings: stored markup is escaped on GET', isset($output['currency_nbk_ip'], $output['currency_nbk_margins'], $output['error_ip'], $output['error_margins']) && $output['currency_nbk_ip'] === '&quot;&gt;&lt;b&gt;x&lt;/b&gt;' && $output['currency_nbk_margins'] === '&quot;&gt;&lt;b&gt;x&lt;/b&gt;' && $output['error_ip'] === '' && $output['error_margins'] === '', show($output));
+
+list($response, $settings) = nbk_admin_index('GET', array(), array('currency_nbk_margins' => "a'b&c"));
+$output = is_array($response->output) ? $response->output : array();
+check('settings: quote and ampersand are escaped', isset($output['currency_nbk_margins']) && $output['currency_nbk_margins'] === 'a&#039;b&amp;c', show($output));
+
+list($response, $settings) = nbk_admin_index('GET', array(), array('currency_nbk_ip' => '2001:db8::1', 'currency_nbk_margins' => 'EUR:3,5,USD:2'));
+$output = is_array($response->output) ? $response->output : array();
+check('settings: valid values pass through unchanged', isset($output['currency_nbk_ip'], $output['currency_nbk_margins']) && $output['currency_nbk_ip'] === '2001:db8::1' && $output['currency_nbk_margins'] === 'EUR:3,5,USD:2', show($output));
+
+list($response, $settings) = nbk_admin_index('GET', array(), array());
+$output = is_array($response->output) ? $response->output : array();
+check('settings: missing settings render as empty strings', isset($output['currency_nbk_ip'], $output['currency_nbk_margins']) && $output['currency_nbk_ip'] === '' && $output['currency_nbk_margins'] === '', show($output));
+check('settings: cron command is unchanged', isset($output['currency_nbk_cron']) && $output['currency_nbk_cron'] === 'curl -s &quot;https://shop.test/index.php?route=extension/currency/nbk/refresh&quot;', show($output));
+
+list($response, $settings) = nbk_admin_index('POST', array('currency_nbk_ip' => array('x'), 'currency_nbk_margins' => array('x'), 'currency_nbk_status' => '1'), array());
+$output = is_array($response->output) ? $response->output : array();
+check('settings: array ip and margins render as empty strings', $settings->calls === array() && isset($output['currency_nbk_ip'], $output['currency_nbk_margins']) && $output['currency_nbk_ip'] === '' && $output['currency_nbk_margins'] === '', show(array($settings->calls, $output)));
+
+list($response, $settings) = nbk_admin_index('GET', array(), array('currency_nbk_margins' => "EUR\xFF"));
+$output = is_array($response->output) ? $response->output : array();
+check('settings: invalid UTF-8 is substituted the same on every PHP', isset($output['currency_nbk_margins']) && $output['currency_nbk_margins'] === "EUR\xEF\xBF\xBD", show($output));
+
 $fake = new FakeNbkModel();
 list($controller) = nbk_controller('NbkTest\\AdminController\\ControllerExtensionCurrencyNbk', array(
 	'config'                       => new FakeConfig(array()),

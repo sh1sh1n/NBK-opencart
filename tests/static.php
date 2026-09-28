@@ -128,6 +128,17 @@ foreach (array('if', 'for', 'block') as $tag) {
 
 check('twig block tags are balanced', !$balance, implode("\n", $balance));
 
+// The controller escapes these; a Twig filter on top would double-escape them.
+$unfiltered = array();
+
+foreach (array('currency_nbk_ip', 'currency_nbk_margins', 'currency_nbk_cron') as $name) {
+	if (strpos($twig, 'value="{{ ' . $name . ' }}"') === false || preg_match('/' . $name . '\s*\|/', $twig)) {
+		$unfiltered[] = $name;
+	}
+}
+
+check('twig prints settings values unfiltered (escaped in controller)', !$unfiltered, implode("\n", $unfiltered));
+
 // --- Portability: one codebase for PHP 7.4 .. 8.5 ----------------------------
 // php -l on 7.4 already rejects 8.x syntax; these catch what lint cannot.
 
