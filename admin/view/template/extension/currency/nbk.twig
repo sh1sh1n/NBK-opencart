@@ -1,0 +1,70 @@
+{{ header }}{{ column_left }}
+<div id="content">
+  <div class="page-header">
+    <div class="container-fluid">
+      <div class="pull-right">
+        <button type="submit" form="form-currency" data-toggle="tooltip" title="{{ button_save }}" class="btn btn-primary"><i class="fa fa-save"></i></button>
+        <a href="{{ cancel }}" data-toggle="tooltip" title="{{ button_cancel }}" class="btn btn-default"><i class="fa fa-reply"></i></a>
+      </div>
+      <h1>{{ heading_title }}</h1>
+      <ul class="breadcrumb">
+        {% for breadcrumb in breadcrumbs %}
+        <li><a href="{{ breadcrumb.href }}">{{ breadcrumb.text }}</a></li>
+        {% endfor %}
+      </ul>
+    </div>
+  </div>
+  <div class="container-fluid">
+    {% if error_warning %}
+    <div class="alert alert-danger"><i class="fa fa-exclamation-circle"></i> {{ error_warning }}
+      <button type="button" class="close" data-dismiss="alert">&times;</button>
+    </div>
+    {% endif %}
+    <div class="panel panel-default">
+      <div class="panel-heading">
+        <h3 class="panel-title"><i class="fa fa-pencil"></i> {{ heading_title }}</h3>
+      </div>
+      <div class="panel-body">
+        <div class="alert alert-info">{{ text_edit|raw }}</div>
+        <form action="{{ action }}" method="post" enctype="multipart/form-data" id="form-currency" class="form-horizontal">
+          <div class="form-group">
+            <label class="col-sm-2 control-label" for="input-status">{{ entry_status }}</label>
+            <div class="col-sm-10">
+              <select name="currency_nbk_status" id="input-status" class="form-control">
+                {% if currency_nbk_status %}
+                <option value="1" selected="selected">{{ text_enabled }}</option>
+                <option value="0">{{ text_disabled }}</option>
+                {% else %}
+                <option value="1">{{ text_enabled }}</option>
+                <option value="0" selected="selected">{{ text_disabled }}</option>
+                {% endif %}
+              </select>
+            </div>
+          </div>
+          <div class="form-group">
+            <label class="col-sm-2 control-label" for="input-ip">{{ entry_ip }}</label>
+            <div class="col-sm-10">
+              <input type="text" name="currency_nbk_ip" value="{{ currency_nbk_ip }}" placeholder="{{ entry_ip }}" id="input-ip" class="form-control"/>
+              {% if error_ip %}<div class="text-danger">{{ error_ip }}</div>{% endif %}
+              <div class="text-muted">{{ help_ip }}</div>
+            </div>
+          </div>
+          <div class="form-group">
+            <label class="col-sm-2 control-label" for="input-margins">{{ entry_margins }}</label>
+            <div class="col-sm-10">
+              <input type="text" name="currency_nbk_margins" value="{{ currency_nbk_margins }}" placeholder="EUR:3,USD:2,RUB:5" id="input-margins" class="form-control"/>
+              <div class="text-muted">{{ help_margins }}</div>
+            </div>
+          </div>
+          <div class="form-group">
+            <label class="col-sm-2 control-label">{{ entry_cron }}</label>
+            <div class="col-sm-10">
+              <input type="text" value="{{ currency_nbk_cron }}" class="form-control" readonly/>
+            </div>
+          </div>
+        </form>
+      </div>
+    </div>
+  </div>
+</div>
+{{ footer }}
