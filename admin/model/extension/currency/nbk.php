@@ -46,7 +46,11 @@ class ModelExtensionCurrencyNbk extends Model {
 		curl_setopt($curl, CURLOPT_CONNECTTIMEOUT, 30);
 		curl_setopt($curl, CURLOPT_TIMEOUT, 30);
 		$response = curl_exec($curl);
-		curl_close($curl);
+		// No-op since PHP 8.0 (the handle is freed with its last reference) and
+		// deprecated in 8.5, where the notice would leak into the cron response.
+		if (PHP_VERSION_ID < 80000) {
+			curl_close($curl);
+		}
 
 		if (!$response) {
 			return false;
