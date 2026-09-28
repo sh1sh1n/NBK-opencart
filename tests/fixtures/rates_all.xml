@@ -1,0 +1,61 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Hand-made copy of the nationalbank.kz/rss/rates_all.xml format with round
+     rates, so expected values in smoke.php can be written down exactly. -->
+<rss version="2.0">
+	<channel>
+		<title>Official exchange rates of National Bank of Republic Kazakhstan</title>
+		<link>www.nationalbank.kz</link>
+		<item>
+			<title>USD</title>
+			<pubDate>28.09.2026</pubDate>
+			<description>500</description>
+			<quant>1</quant>
+		</item>
+		<item>
+			<title>EUR</title>
+			<pubDate>28.09.2026</pubDate>
+			<description>550.00</description>
+			<quant>1</quant>
+		</item>
+		<!-- Quoted per 10 units, like AMD in the real feed: 1 AMD = 1.25 KZT. -->
+		<item>
+			<title>AMD</title>
+			<pubDate>28.09.2026</pubDate>
+			<description>12.5</description>
+			<quant>10</quant>
+		</item>
+		<!-- Decimal comma must be accepted: 1 RUB = 5.5 KZT. -->
+		<item>
+			<title>RUB</title>
+			<pubDate>28.09.2026</pubDate>
+			<description>5,5</description>
+			<quant>1</quant>
+		</item>
+		<!-- No <quant>: treated as 1. 1 CNY = 70 KZT. -->
+		<item>
+			<title> CNY </title>
+			<pubDate>28.09.2026</pubDate>
+			<description>70</description>
+		</item>
+		<!-- Broken entries below must be skipped, never written. -->
+		<item>
+			<title>XZR</title>
+			<description>0</description>
+			<quant>1</quant>
+		</item>
+		<item>
+			<title>XND</title>
+			<quant>1</quant>
+		</item>
+		<item>
+			<title>XQZ</title>
+			<description>100</description>
+			<quant>0</quant>
+		</item>
+		<item>
+			<title></title>
+			<description>100</description>
+			<quant>1</quant>
+		</item>
+	</channel>
+</rss>
