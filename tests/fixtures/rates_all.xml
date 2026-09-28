@@ -37,6 +37,18 @@
 			<pubDate>28.09.2026</pubDate>
 			<description>70</description>
 		</item>
+		<!-- Extreme rates for the (15,8) column limits; written only when a test
+		     adds them to the SELECT list. -->
+		<item>
+			<title>XLO</title>
+			<description>0.00001</description>
+			<quant>1</quant>
+		</item>
+		<item>
+			<title>XHI</title>
+			<description>1000000000</description>
+			<quant>1</quant>
+		</item>
 		<!-- Broken entries below must be skipped, never written. -->
 		<item>
 			<title>XZR</title>

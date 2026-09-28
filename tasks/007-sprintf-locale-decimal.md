@@ -1,6 +1,6 @@
 # 007 — sprintf('%.8f') зависит от локали: запятая вместо точки
 
-- **Статус:** open
+- **Статус:** done
 - **Приоритет:** низкий. OpenCart 3.0 сам `setlocale()` не вызывает, но хостинг или сторонний модуль может.
 - **Файлы:** `editValueByCode()` и `refresh()` в `admin/model/extension/currency/nbk.php` (и в catalog-копии).
 
@@ -26,3 +26,20 @@
   восстанавливается.
 - В static: `sprintf('%.8f'` в моделях не встречается.
 - `tests/run.sh` → PASS.
+
+## Закрыто
+Вместе с 006 одной правкой. Конвейер architect → coder → verifier,
+1 итерация, PASS по К1–К16.
+
+- В обеих моделях курс форматируется в одном месте: private
+  `formatValue()` → `sprintf('%.8F', …)`, формат не учитывает
+  `LC_NUMERIC`. Через него идут `editValueByCode()` и проверки в
+  `refresh()`. `%.8f` в моделях больше нет.
+- `tests/static.php`: проверка `number formatting ignores the locale
+  (%F, not %f)` по всему коду, кроме самого static.php.
+- `tests/smoke.php`: helper `skip()`, итог `N passed, M failed,
+  K skipped`; поиск локали с запятой (`ru_RU`/`de_DE`/`fr_FR`) и три
+  проверки на сторону: запись с точкой при default KZT и USD, наценки
+  применяются, локаль восстанавливается (`try/finally`). Без такой
+  локали — `SKIP`, прогон не падает.
+- На коде из HEAD новые проверки падают (в SQL попадало `0,80000000`).

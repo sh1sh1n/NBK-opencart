@@ -147,6 +147,7 @@ $gone  = 'utf8_encode|utf8_decode|strftime|gmstrftime|libxml_disable_entity_load
 
 $portability = array();
 $encoding    = array();
+$formatting  = array();
 
 foreach ($code as $path) {
 	$source = file_get_contents($root . '/' . $path);
@@ -199,11 +200,17 @@ foreach ($code as $path) {
 		if (strpos($line, 'FILTER_SANITIZE_STRING') !== false) {
 			$portability[] = $at . 'FILTER_SANITIZE_STRING is deprecated in 8.1';
 		}
+
+		// Lowercase f follows LC_NUMERIC and may print a decimal comma into SQL.
+		if (preg_match('/printf\s*\(\s*[\'"][^\'"]*%[-+ 0]*\d*(?:\.\d+)?f/', $line)) {
+			$formatting[] = $at . 'use %F (locale-independent) instead of %f';
+		}
 	}
 }
 
 check('no PHP 8-only or deprecated APIs', !$portability, implode("\n", $portability));
 check('UTF-8 without BOM, LF, no closing ?>', !$encoding, implode("\n", $encoding));
+check('number formatting ignores the locale (%F, not %f)', !$formatting, implode("\n", $formatting));
 
 echo 'static: ' . $passed . ' passed, ' . $failed . " failed\n";
 

@@ -1,11 +1,33 @@
 <?php
 class ModelExtensionCurrencyNbk extends Model {
 	public function editValueByCode($code, $value) {
-		// decimal(15,8)-safe fixed-point string; avoids scientific notation that
-		// a plain (float) cast can produce for very small/large cross-rates.
-		$value = sprintf('%.8f', (float)$value);
+		$value = $this->formatValue($value);
 		$this->db->query("UPDATE `" . DB_PREFIX . "currency` SET `value` = '" . $value . "', `date_modified` = NOW() WHERE `code` = '" . $this->db->escape((string)$code) . "'");
 		$this->cache->delete('currency');
+	}
+
+	// decimal(15,8)-safe fixed-point string with 8 digits: a plain float-to-string
+	// cast can give scientific notation for very small/large cross-rates. The
+	// uppercase F ignores LC_NUMERIC, which the host or another extension may set:
+	// the lowercase one would print "0,002..." there and break the SQL value.
+	private function formatValue($value) {
+		return sprintf('%.8F', (float)$value);
+	}
+
+	// `value` is (15,8): at most 7 integer digits, i.e. up to 9999999.99999999.
+	// Strict MySQL rejects a larger UPDATE, non-strict silently clips it.
+	private const VALUE_LIMIT = 10000000;
+
+	// Upper margin bound for the settings form only, see validateMarginRange().
+	private const MARGIN_MAX = 100;
+
+	// Whether the rate survives the column as a positive number. Compared at the
+	// 8-digit DB precision: 9999999.999999999 is stored as 10000000.00000000 and
+	// a tiny rate as 0.00000000, both refused. INF/NAN from garbage never fit.
+	private function fitsColumn($value) {
+		$stored = (float)$this->formatValue($value);
+
+		return is_finite((float)$value) && $stored > 0 && $stored < self::VALUE_LIMIT;
 	}
 
 	// One "CODE:percent" pair of the margin setting "EUR:3,5,USD:2,RUB:5".
@@ -52,15 +74,17 @@ class ModelExtensionCurrencyNbk extends Model {
 
 	// Range check for the settings form, run after validateMargins(). The rate is
 	// multiplied by (1 + percent / 100): -100 zeroes it and anything lower makes
-	// it negative. Every pair counts, even one a later duplicate would override,
-	// so nothing like that is ever stored. No upper bound on purpose.
+	// it negative. 100 already doubles the rate, so more is almost surely a typo.
+	// Every pair counts, even one a later duplicate would override, so nothing
+	// like that is ever stored. refresh() deliberately does not apply the upper
+	// bound to values saved earlier; it only guards the column range.
 	public function validateMarginRange($value) {
 		if (!is_string($value)) {
 			return false;
 		}
 
 		foreach ($this->matchMarginPairs($value) as $pair) {
-			if ($pair[1] <= -100) {
+			if ($pair[1] <= -100 || $pair[1] > self::MARGIN_MAX) {
 				return false;
 			}
 		}
@@ -146,15 +170,23 @@ class ModelExtensionCurrencyNbk extends Model {
 
 			$value = $rates[$default] / $rates[$code];
 
+			// A rate the column cannot hold is skipped like a currency outside the
+			// feed: strict MySQL would abort the update halfway, and a clipped or
+			// zero rate would corrupt prices.
+			if (!$this->fitsColumn($value)) {
+				continue;
+			}
+
 			// Margin applies to foreign currencies only; the default must stay exactly 1.
 			if ($code !== $default && isset($margins[$code]) && $margins[$code] != 0) {
 				$marked = $value * (1 + ($margins[$code] / 100));
 
 				// -100% or less (possibly saved before the form checked the range)
-				// would zero or negate prices; keep the official rate instead, which
-				// also repairs zeros written by older versions. Checked at the
-				// 8-digit DB precision, so a rate that rounds to 0 is refused too.
-				if ((float)sprintf('%.8f', $marked) > 0) {
+				// would zero or negate prices, and a huge margin can push the rate
+				// past the column; keep the official rate in both cases, which also
+				// repairs zeros written by older versions. Checked at the 8-digit
+				// DB precision, so a rate that rounds to 0 is refused too.
+				if ($this->fitsColumn($marked)) {
 					$value = $marked;
 				}
 			}

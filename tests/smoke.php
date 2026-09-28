@@ -20,8 +20,9 @@ define('HTTPS_CATALOG', 'https://shop.test/');
 
 $root   = dirname(__DIR__);
 $issues = array();
-$failed = 0;
-$passed = 0;
+$failed  = 0;
+$passed  = 0;
+$skipped = 0;
 
 // Namespaced copies of module files live here, mirroring their repo paths,
 // so diagnostics point at e.g. admin/model/extension/currency/nbk.php:49.
@@ -298,6 +299,14 @@ function check($name, $ok, $detail = '') {
 	}
 }
 
+// A check that cannot run here (e.g. a missing locale); never a failure.
+function skip($name, $reason) {
+	global $skipped;
+
+	$skipped++;
+	echo 'SKIP ' . $name . ' -- ' . $reason . "\n";
+}
+
 function show($value) {
 	return str_replace("\n", ' ', var_export($value, true));
 }
@@ -381,12 +390,38 @@ function nbk_admin_index($method, array $post, array $config, $permitted = true)
 	return array($registry->get('response'), $settings, $spy);
 }
 
+// First installed locale whose decimal separator is a comma, or null. The
+// current LC_NUMERIC is restored, so the rest of the run is unaffected.
+function nbk_comma_locale() {
+	$saved = setlocale(LC_NUMERIC, '0');
+	$found = null;
+
+	foreach (array('ru_RU.UTF-8', 'ru_RU.utf8', 'ru_RU', 'de_DE.UTF-8', 'de_DE.utf8', 'de_DE', 'fr_FR.UTF-8', 'fr_FR.utf8') as $candidate) {
+		if (setlocale(LC_NUMERIC, $candidate) === false) {
+			continue;
+		}
+
+		$conv = localeconv();
+
+		if ($conv['decimal_point'] === ',') {
+			$found = $candidate;
+			break;
+		}
+	}
+
+	setlocale(LC_NUMERIC, $saved);
+
+	return $found;
+}
+
 $fixture = file_get_contents(__DIR__ . '/fixtures/rates_all.xml');
 $codes   = array('KZT', 'USD', 'EUR', 'AMD', 'RUB', 'CNY', 'GBP', 'XZR', 'XND', 'XQZ');
 
 echo 'PHP ' . PHP_VERSION . "\n";
 
 // --- Models: admin and catalog copies must behave the same ------------------
+
+$comma = nbk_comma_locale();
 
 $models = array(
 	'admin'   => 'admin/model/extension/currency/nbk.php',
@@ -418,6 +453,39 @@ foreach ($models as $side => $file) {
 	ksort($expect);
 	check($side . ': default USD refresh returns true', $result === true, show($result));
 	check($side . ': default USD cross-rates, default stays 1, negative/lowercase margin', $writes === $expect, show($writes));
+
+	// A host locale with a decimal comma must not leak into SQL or switch margins off.
+	// Nothing inside the block may turn a float into a string: on 7.4 that also
+	// follows LC_NUMERIC, so checks run only after the locale is restored.
+	if ($comma !== null) {
+		$saved = setlocale(LC_NUMERIC, '0');
+		setlocale(LC_NUMERIC, $comma);
+
+		try {
+			list($model, $registry) = nbk_model($ns, array('currency_nbk_status' => 1, 'config_currency' => 'KZT', 'currency_nbk_margins' => 'USD:2'), $codes);
+			$model->refresh();
+			$kzt = $registry->get('db')->writes();
+
+			list($model, $registry) = nbk_model($ns, array('currency_nbk_status' => 1, 'config_currency' => 'USD', 'currency_nbk_margins' => 'USD:2,EUR:10,amd:-50'), $codes);
+			$model->refresh();
+			$usd = $registry->get('db')->writes();
+		} finally {
+			setlocale(LC_NUMERIC, $saved);
+		}
+
+		$expect = array('KZT' => '1.00000000', 'USD' => '0.00204000', 'EUR' => '0.00181818', 'AMD' => '0.80000000', 'RUB' => '0.18181818', 'CNY' => '0.01428571');
+		ksort($kzt);
+		ksort($expect);
+		check($side . ': comma locale: default KZT written with a dot, USD margin applied', $kzt === $expect, show($kzt));
+
+		$expect = array('KZT' => '500.00000000', 'USD' => '1.00000000', 'EUR' => '1.00000000', 'AMD' => '200.00000000', 'RUB' => '90.90909091', 'CNY' => '7.14285714');
+		ksort($usd);
+		ksort($expect);
+		check($side . ': comma locale: default USD cross-rates', $usd === $expect, show($usd));
+		check($side . ': comma locale restored', setlocale(LC_NUMERIC, '0') === $saved, show(setlocale(LC_NUMERIC, '0')));
+	} else {
+		skip($side . ': comma locale checks', 'no decimal-comma locale installed');
+	}
 
 	// Default missing from the feed: abort without writing anything.
 	list($model, $registry) = nbk_model($ns, array('currency_nbk_status' => 1, 'config_currency' => 'GBP'), $codes);
@@ -541,6 +609,67 @@ foreach ($models as $side => $file) {
 	foreach (array('USD:-100', 'USD:-150', 'USD:-100,0', 'usd:-100%', 'EUR:3,USD:-100', 'USD:-150,USD:2', array('USD:-150')) as $value) {
 		check($side . ': validateMarginRange rejects ' . show($value), $model->validateMarginRange($value) === false);
 	}
+
+	// Default USD: KZT 500 * (1 + 999999999.99) = 5e11 overflows (15,8), so the
+	// official 500 is written; EUR 500/550 * 1.1 = 1; the default ignores its margin.
+	list($model, $registry) = nbk_model($ns, array('currency_nbk_status' => 1, 'config_currency' => 'USD', 'currency_nbk_margins' => 'USD:99999999999,KZT:99999999999,EUR:10'), $codes);
+	$result = $model->refresh();
+	$writes = $registry->get('db')->writes();
+	$expect = array('KZT' => '500.00000000', 'USD' => '1.00000000', 'EUR' => '1.00000000', 'AMD' => '400.00000000', 'RUB' => '90.90909091', 'CNY' => '7.14285714');
+	ksort($writes);
+	ksort($expect);
+	check($side . ': overflowing margin falls back to the official rate', $result === true && $writes === $expect, show($writes));
+
+	$fits = $writes !== array();
+
+	foreach ($writes as $v) {
+		if (!((float)$v > 0 && (float)$v < 10000000)) {
+			$fits = false;
+		}
+	}
+
+	check($side . ': overflowing margin writes only values that fit (15,8)', $fits, show($writes));
+
+	// Column edge, default USD: 500 * 19999.99 = 9999995 fits, 500 * 20000 = 10^7 does not.
+	foreach (array('KZT:1999899' => '9999995.00000000', 'KZT:1999900' => '500.00000000') as $setting => $kzt) {
+		list($model, $registry) = nbk_model($ns, array('currency_nbk_status' => 1, 'config_currency' => 'USD', 'currency_nbk_margins' => $setting), $codes);
+		$result = $model->refresh();
+		$writes = $registry->get('db')->writes();
+		check($side . ': refresh with ' . $setting . ' writes KZT ' . $kzt, $result === true && isset($writes['KZT']) && $writes['KZT'] === $kzt, show($writes));
+	}
+
+	// Stored before the form's 100% cap: still applied, 1/500 * 2.5 = 0.005.
+	list($model, $registry) = nbk_model($ns, array('currency_nbk_status' => 1, 'config_currency' => 'KZT', 'currency_nbk_margins' => 'USD:150'), $codes);
+	$result = $model->refresh();
+	$writes = $registry->get('db')->writes();
+	check($side . ': refresh with stored USD:150 writes USD 0.00500000', $result === true && isset($writes['USD']) && $writes['USD'] === '0.00500000', show($writes));
+
+	// Default USD: XLO 500/0.00001 = 5e7 overflows and is skipped, margin or not;
+	// XHI 500/10^9 = 0.0000005 fits.
+	list($model, $registry) = nbk_model($ns, array('currency_nbk_status' => 1, 'config_currency' => 'USD', 'currency_nbk_margins' => 'XLO:10'), array_merge($codes, array('XLO', 'XHI')));
+	$result = $model->refresh();
+	$writes = $registry->get('db')->writes();
+	$expect = array('KZT' => '500.00000000', 'USD' => '1.00000000', 'EUR' => '0.90909091', 'AMD' => '400.00000000', 'RUB' => '90.90909091', 'CNY' => '7.14285714', 'XHI' => '0.00000050');
+	ksort($writes);
+	ksort($expect);
+	check($side . ': cross-rate over the column limit is skipped, the rest written', $result === true && !isset($writes['XLO']) && $writes === $expect, show(array($result, $writes)));
+
+	// Default KZT: XHI 1/10^9 rounds to 0.00000000 and is skipped; XLO 1/0.00001 = 100000.
+	list($model, $registry) = nbk_model($ns, array('currency_nbk_status' => 1, 'config_currency' => 'KZT'), array_merge($codes, array('XLO', 'XHI')));
+	$result = $model->refresh();
+	$writes = $registry->get('db')->writes();
+	$expect = array('KZT' => '1.00000000', 'USD' => '0.00200000', 'EUR' => '0.00181818', 'AMD' => '0.80000000', 'RUB' => '0.18181818', 'CNY' => '0.01428571', 'XLO' => '100000.00000000');
+	ksort($writes);
+	ksort($expect);
+	check($side . ': cross-rate rounding to zero is skipped, the rest written', $result === true && !isset($writes['XHI']) && $writes === $expect, show(array($result, $writes)));
+
+	foreach (array('USD:100', 'USD:100,0', 'EUR:3,USD:99,99') as $value) {
+		check($side . ': validateMarginRange accepts ' . show($value), $model->validateMarginRange($value) === true);
+	}
+
+	foreach (array('USD:100,01', 'USD:101', 'USD:99999999999', 'EUR:3,USD:1000', 'USD:1000,USD:2') as $value) {
+		check($side . ': validateMarginRange rejects ' . show($value), $model->validateMarginRange($value) === false);
+	}
 }
 
 // --- Catalog controller: the cron endpoint contract -------------------------
@@ -647,6 +776,20 @@ check('settings: USD:-99,99 is in range and saved', $settings->calls === array(a
 list($response, $settings) = nbk_admin_index('GET', array(), array('currency_nbk_margins' => 'USD:-150'));
 $output = is_array($response->output) ? $response->output : array();
 check('settings: GET shows stored out-of-range value without error', isset($output['error_margins'], $output['currency_nbk_margins']) && $output['error_margins'] === '' && $output['currency_nbk_margins'] === 'USD:-150', show($output));
+
+// Upper bound: more than 100% is refused on save, exactly 100% is fine.
+list($response, $settings) = nbk_admin_index('POST', array('currency_nbk_margins' => 'USD:99999999999', 'currency_nbk_status' => '1'), array());
+$output = is_array($response->output) ? $response->output : array();
+check('settings: USD:99999999999 is rejected as out of range', $settings->calls === array() && $response->redirect === null && isset($output['error_margins'], $output['currency_nbk_margins']) && $output['error_margins'] === 'error_margins_range' && $output['currency_nbk_margins'] === 'USD:99999999999', show(array($settings->calls, $response->redirect, $output)));
+
+$post = array('currency_nbk_margins' => 'USD:100', 'currency_nbk_status' => '1');
+list($response, $settings) = nbk_admin_index('POST', $post, array());
+check('settings: USD:100 is in range and saved', $settings->calls === array(array('editSetting', 'currency_nbk', $post)) && $response->redirect !== null, show(array($settings->calls, $response->redirect)));
+
+// Saved before the cap: shown as is, only the next save asks to fix it.
+list($response, $settings) = nbk_admin_index('GET', array(), array('currency_nbk_margins' => 'USD:150'));
+$output = is_array($response->output) ? $response->output : array();
+check('settings: GET shows stored USD:150 without error', isset($output['error_margins'], $output['currency_nbk_margins']) && $output['error_margins'] === '' && $output['currency_nbk_margins'] === 'USD:150', show($output));
 
 // Twig in OC 3 does not autoescape, so the controller must hand over attribute-safe values.
 $x   = '"><b>x</b>';
@@ -756,6 +899,6 @@ foreach ($issues as $issue => $count) {
 
 check('no notices, warnings or deprecations', $issues === array(), "\n     " . implode("\n     ", $lines));
 
-echo 'PHP ' . PHP_VERSION . ': ' . $passed . ' passed, ' . $failed . " failed\n";
+echo 'PHP ' . PHP_VERSION . ': ' . $passed . ' passed, ' . $failed . ' failed, ' . $skipped . " skipped\n";
 
 exit($failed ? 1 : 0);
