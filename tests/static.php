@@ -131,13 +131,29 @@ check('twig block tags are balanced', !$balance, implode("\n", $balance));
 // The controller escapes these; a Twig filter on top would double-escape them.
 $unfiltered = array();
 
-foreach (array('currency_nbk_ip', 'currency_nbk_margins', 'currency_nbk_cron') as $name) {
+foreach (array('currency_nbk_ip', 'currency_nbk_margins', 'currency_nbk_key', 'currency_nbk_cron') as $name) {
 	if (strpos($twig, 'value="{{ ' . $name . ' }}"') === false || preg_match('/' . $name . '\s*\|/', $twig)) {
 		$unfiltered[] = $name;
 	}
 }
 
 check('twig prints settings values unfiltered (escaped in controller)', !$unfiltered, implode("\n", $unfiltered));
+
+// The cron key guards the refresh URL, so it must come from a CSPRNG: a
+// Math.random key could be predicted from other values the page generated.
+$generator = array();
+
+foreach (array('getRandomValues', 'id="button-key-generate"', 'name="currency_nbk_key"') as $needle) {
+	if (strpos($twig, $needle) === false) {
+		$generator[] = 'missing ' . $needle;
+	}
+}
+
+if (strpos($twig, 'Math.random') !== false) {
+	$generator[] = 'uses Math.random';
+}
+
+check('twig key generator uses crypto.getRandomValues, never Math.random', !$generator, implode("\n", $generator));
 
 // --- Portability: one codebase for PHP 7.4 .. 8.5 ----------------------------
 // php -l on 7.4 already rejects 8.x syntax; these catch what lint cannot.

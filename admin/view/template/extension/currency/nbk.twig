@@ -26,7 +26,7 @@
       </div>
       <div class="panel-body">
         <div class="alert alert-info">{{ text_edit|raw }}</div>
-        {# ip, margins and cron arrive HTML-escaped from the controller (autoescape is off in OC 3); adding |e here would double-escape them. #}
+        {# ip, margins, key and cron arrive HTML-escaped from the controller (autoescape is off in OC 3); adding |e here would double-escape them. #}
         <form action="{{ action }}" method="post" enctype="multipart/form-data" id="form-currency" class="form-horizontal">
           <div class="form-group">
             <label class="col-sm-2 control-label" for="input-status">{{ entry_status }}</label>
@@ -40,6 +40,19 @@
                 <option value="0" selected="selected">{{ text_disabled }}</option>
                 {% endif %}
               </select>
+            </div>
+          </div>
+          <div class="form-group required">
+            <label class="col-sm-2 control-label" for="input-key">{{ entry_key }}</label>
+            <div class="col-sm-10">
+              <div class="input-group">
+                <input type="text" name="currency_nbk_key" value="{{ currency_nbk_key }}" placeholder="{{ entry_key }}" id="input-key" class="form-control" autocomplete="off"/>
+                <span class="input-group-btn">
+                  <button type="button" id="button-key-generate" class="btn btn-primary"><i class="fa fa-refresh"></i> {{ button_generate }}</button>
+                </span>
+              </div>
+              {% if error_key %}<div class="text-danger">{{ error_key }}</div>{% endif %}
+              <div class="text-muted">{{ help_key }}</div>
             </div>
           </div>
           <div class="form-group">
@@ -61,7 +74,7 @@
           <div class="form-group">
             <label class="col-sm-2 control-label">{{ entry_cron }}</label>
             <div class="col-sm-10">
-              <input type="text" value="{{ currency_nbk_cron }}" class="form-control" readonly/>
+              <input type="text" value="{{ currency_nbk_cron }}" placeholder="{{ text_cron_no_key }}" class="form-control" readonly/>
             </div>
           </div>
         </form>
@@ -69,4 +82,39 @@
     </div>
   </div>
 </div>
+<script type="text/javascript">
+(function () {
+  var input = document.getElementById('input-key');
+  var button = document.getElementById('button-key-generate');
+  var source = window.crypto || window.msCrypto;
+
+  // No CSPRNG, no generator: a non-crypto fallback could be predicted, so the admin types a key in.
+  if (!source || !source.getRandomValues) {
+    button.disabled = true;
+    return;
+  }
+
+  // 16 random bytes -> 32 lowercase hex chars (128 bits), valid for the form rule.
+  function generate() {
+    var bytes = new Uint8Array(16);
+    var hex = '';
+    var i;
+
+    source.getRandomValues(bytes);
+
+    for (i = 0; i < bytes.length; i++) {
+      hex += ('0' + bytes[i].toString(16)).slice(-2);
+    }
+
+    input.value = hex;
+  }
+
+  button.addEventListener('click', generate);
+
+  // Old installs have no key yet: prefill it, so a single Save turns cron back on.
+  if (input.value === '') {
+    generate();
+  }
+})();
+</script>
 {{ footer }}

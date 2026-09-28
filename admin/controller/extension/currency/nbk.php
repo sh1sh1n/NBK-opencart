@@ -19,6 +19,7 @@ class ControllerExtensionCurrencyNbk extends Controller {
 		$data['error_warning'] = isset($this->error['warning']) ? $this->error['warning'] : '';
 		$data['error_ip']      = isset($this->error['ip']) ? $this->error['ip'] : '';
 		$data['error_margins'] = isset($this->error['margins']) ? $this->error['margins'] : '';
+		$data['error_key']     = isset($this->error['key']) ? $this->error['key'] : '';
 
 		$data['breadcrumbs'] = array();
 
@@ -44,7 +45,16 @@ class ControllerExtensionCurrencyNbk extends Controller {
 		$data['text_edit'] = str_replace('%1', $this->url->link('localisation/currency', 'user_token=' . $this->session->data['user_token'], true), $data['text_edit']);
 		$data['text_edit'] = str_replace('%2', $this->url->link('setting/store', 'user_token=' . $this->session->data['user_token'], true), $data['text_edit']);
 
-		$data['currency_nbk_cron'] = $this->escapeAttr('curl -s "' . HTTPS_CATALOG . 'index.php?route=extension/currency/nbk/refresh"');
+		// Built from the stored key, not from POST: cron checks what is saved, so a
+		// key typed in but not yet saved would give a command that gets a 403.
+		$key = $this->config->get('currency_nbk_key');
+		$data['currency_nbk_cron'] = (is_string($key) && $key !== '') ? $this->escapeAttr('curl -s "' . HTTPS_CATALOG . 'index.php?route=extension/currency/nbk/refresh&key=' . rawurlencode($key) . '"') : '';
+
+		if (isset($this->request->post['currency_nbk_key'])) {
+			$data['currency_nbk_key'] = $this->escapeAttr($this->request->post['currency_nbk_key']);
+		} else {
+			$data['currency_nbk_key'] = $this->escapeAttr($this->config->get('currency_nbk_key'));
+		}
 
 		if (isset($this->request->post['currency_nbk_ip'])) {
 			$data['currency_nbk_ip'] = $this->escapeAttr($this->request->post['currency_nbk_ip']);
@@ -77,6 +87,10 @@ class ControllerExtensionCurrencyNbk extends Controller {
 	// and is rejected rather than coerced: stored junk would later read as "enabled".
 	// The ip check uses !== '' instead of empty(): empty('0') is true, so '0' used to
 	// be saved and cron then treated it as a lock that no address can ever match.
+	// The key is required: without it cron stays closed. Letters and digits only,
+	// so it goes into the URL, the HTML attribute and the shell command unencoded;
+	// \z rather than $, since $ also accepts a trailing newline. No trim: the key is
+	// saved exactly as typed, so the cron command matches it byte for byte.
 	protected function validate() {
 		if (!$this->user->hasPermission('modify', 'extension/currency/nbk')) {
 			$this->error['warning'] = $this->language->get('error_permission');
@@ -89,6 +103,11 @@ class ControllerExtensionCurrencyNbk extends Controller {
 			$this->error['ip'] = $this->language->get('error_ip');
 		} elseif ((string)$ip !== '' && !filter_var((string)$ip, FILTER_VALIDATE_IP)) {
 			$this->error['ip'] = $this->language->get('error_ip');
+		}
+
+		$key = isset($this->request->post['currency_nbk_key']) ? $this->request->post['currency_nbk_key'] : '';
+		if (!is_scalar($key) || !preg_match('/^[A-Za-z0-9]{32,64}\z/', (string)$key)) {
+			$this->error['key'] = $this->language->get('error_key');
 		}
 
 		$margins = isset($this->request->post['currency_nbk_margins']) ? $this->request->post['currency_nbk_margins'] : '';

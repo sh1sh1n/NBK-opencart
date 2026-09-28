@@ -9,14 +9,20 @@ $_['text_success']     = 'Success: You have modified NBK currency settings!';
 $_['text_edit']        = 'Rates are pulled from nationalbank.kz and converted relative to your store default currency (the feed base is KZT). Manage your currencies <a href="%1">here</a> and set the default in <a href="%2">store settings</a>. Run "Refresh" on the Currencies page or use the cron command below.';
 $_['text_enabled']     = 'Enabled';
 $_['text_disabled']    = 'Disabled';
+$_['text_cron_no_key'] = 'Save the settings with a security key to get the cron command.';
+
+// Button
+$_['button_generate']  = 'Generate';
 
 // Entry
 $_['entry_status']     = 'Status';
 $_['entry_ip']         = 'Cron IP';
 $_['entry_cron']       = 'Cron command';
+$_['entry_key']        = 'Security key';
 
 // Help
 $_['help_ip']          = 'Restrict the cron refresh URL to this single IP. Leave blank to allow any source.';
+$_['help_key']         = 'The cron URL refreshes rates only with this key (the key parameter). Click "Generate", save the settings and replace your cron command with the new one below.';
 
 // Error
 $_['error_permission'] = 'Warning: You do not have permission to modify NBK currency!';
@@ -24,6 +30,7 @@ $_['error_ip']         = 'Invalid IP address!';
 $_['error_margins']    = 'Invalid markup format! Example: EUR:3,5,USD:2';
 $_['error_margins_range'] = 'Markup must be greater than -100% and no more than 100%!';
 $_['error_status'] = 'Invalid status value!';
+$_['error_key']        = 'The security key must be 32–64 Latin letters and digits. Click "Generate".';
 
 // Margins
 $_['entry_margins']    = 'Currency markups (%)';

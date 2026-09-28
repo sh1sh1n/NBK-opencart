@@ -418,6 +418,9 @@ $fixture = file_get_contents(__DIR__ . '/fixtures/rates_all.xml');
 // Same feed plus a KZT item at 2 tenge: the base must stay 1 regardless.
 $fixtureKzt = str_replace('<channel>', "<channel>\n\t\t<item>\n\t\t\t<title>KZT</title>\n\t\t\t<description>2</description>\n\t\t\t<quant>1</quant>\n\t\t</item>", $fixture, $kztInserted);
 $codes   = array('KZT', 'USD', 'EUR', 'AMD', 'RUB', 'CNY', 'GBP', 'XZR', 'XND', 'XQZ');
+// Cron keys: the shortest (32, as the generator makes) and longest (64) the form accepts.
+$key   = '0123456789abcdef0123456789abcdef';
+$key64 = 'AbCdEfGhIjKlMnOpQrStUvWxYz0123456789AbCdEfGhIjKlMnOpQrStUvWxYz01';
 
 echo 'PHP ' . PHP_VERSION . "\n";
 
@@ -699,16 +702,39 @@ foreach ($models as $side => $file) {
 
 nbk_load('catalog/controller/extension/currency/nbk.php', 'NbkTest\\CatalogController');
 
+check('cron: 64-char test key is really 64 chars', strlen($key64) === 64, 'strlen=' . strlen($key64));
+
+// Same length as $key, last char differs.
+$wrong = '0123456789abcdef0123456789abcdee';
+
 $cron = array(
-	// label => array(settings, REMOTE_ADDR or null, model result, expected headers, expected output, model called?)
-	'disabled'               => array(array('currency_nbk_status' => 0), '10.0.0.1', true, array('HTTP/1.1 403 Forbidden'), 'NBK: disabled', false),
-	'IP mismatch'            => array(array('currency_nbk_status' => 1, 'currency_nbk_ip' => '10.0.0.1'), '10.0.0.2', true, array('HTTP/1.1 403 Forbidden'), 'NBK: forbidden', false),
-	'IP set, no REMOTE_ADDR' => array(array('currency_nbk_status' => 1, 'currency_nbk_ip' => '10.0.0.1'), null, true, array('HTTP/1.1 403 Forbidden'), 'NBK: forbidden', false),
-	'IP match (trimmed)'     => array(array('currency_nbk_status' => 1, 'currency_nbk_ip' => ' 10.0.0.1 '), '10.0.0.1', true, array(), 'NBK: ok', true),
-	'no IP lock, ok'         => array(array('currency_nbk_status' => 1), '192.0.2.5', true, array(), 'NBK: ok', true),
-	'no IP lock, failed'     => array(array('currency_nbk_status' => 1), '192.0.2.5', false, array('HTTP/1.1 502 Bad Gateway'), 'NBK: failed', true),
+	// label => array(settings, REMOTE_ADDR or null, model result, expected headers, expected output, model called?, GET key or null)
+	'disabled'               => array(array('currency_nbk_status' => 0, 'currency_nbk_key' => $key), '10.0.0.1', true, array('HTTP/1.1 403 Forbidden'), 'NBK: disabled', false, $key),
+	'IP mismatch'            => array(array('currency_nbk_status' => 1, 'currency_nbk_ip' => '10.0.0.1', 'currency_nbk_key' => $key), '10.0.0.2', true, array('HTTP/1.1 403 Forbidden'), 'NBK: forbidden', false, $key),
+	'IP set, no REMOTE_ADDR' => array(array('currency_nbk_status' => 1, 'currency_nbk_ip' => '10.0.0.1', 'currency_nbk_key' => $key), null, true, array('HTTP/1.1 403 Forbidden'), 'NBK: forbidden', false, $key),
+	'IP match (trimmed)'     => array(array('currency_nbk_status' => 1, 'currency_nbk_ip' => ' 10.0.0.1 ', 'currency_nbk_key' => $key), '10.0.0.1', true, array(), 'NBK: ok', true, $key),
+	'no IP lock, ok'         => array(array('currency_nbk_status' => 1, 'currency_nbk_key' => $key), '192.0.2.5', true, array(), 'NBK: ok', true, $key),
+	'no IP lock, failed'     => array(array('currency_nbk_status' => 1, 'currency_nbk_key' => $key), '192.0.2.5', false, array('HTTP/1.1 502 Bad Gateway'), 'NBK: failed', true, $key),
 	// An old '0' does not open cron (fail-closed); re-saving the form fixes it.
-	'IP 0 stored before the fix' => array(array('currency_nbk_status' => 1, 'currency_nbk_ip' => '0'), '10.0.0.1', true, array('HTTP/1.1 403 Forbidden'), 'NBK: forbidden', false),
+	'IP 0 stored before the fix' => array(array('currency_nbk_status' => 1, 'currency_nbk_ip' => '0', 'currency_nbk_key' => $key), '10.0.0.1', true, array('HTTP/1.1 403 Forbidden'), 'NBK: forbidden', false, $key),
+	// Installs updated from a keyless version stay closed until the form is re-saved.
+	'no key stored, no key sent'      => array(array('currency_nbk_status' => 1), '192.0.2.5', true, array('HTTP/1.1 403 Forbidden'), 'NBK: forbidden', false, null),
+	// hash_equals('', '') is true, so an empty pair must be refused before it.
+	'no key stored, empty key sent'   => array(array('currency_nbk_status' => 1, 'currency_nbk_key' => ''), '192.0.2.5', true, array('HTTP/1.1 403 Forbidden'), 'NBK: forbidden', false, ''),
+	'key not sent'                    => array(array('currency_nbk_status' => 1, 'currency_nbk_key' => $key), '192.0.2.5', true, array('HTTP/1.1 403 Forbidden'), 'NBK: forbidden', false, null),
+	'wrong key, same length'          => array(array('currency_nbk_status' => 1, 'currency_nbk_key' => $key), '192.0.2.5', true, array('HTTP/1.1 403 Forbidden'), 'NBK: forbidden', false, $wrong),
+	'key prefix'                      => array(array('currency_nbk_status' => 1, 'currency_nbk_key' => $key), '192.0.2.5', true, array('HTTP/1.1 403 Forbidden'), 'NBK: forbidden', false, '0123456789abcdef0123456789abcde'),
+	'key with extra chars'            => array(array('currency_nbk_status' => 1, 'currency_nbk_key' => $key), '192.0.2.5', true, array('HTTP/1.1 403 Forbidden'), 'NBK: forbidden', false, $key . 'x'),
+	'key case differs'                => array(array('currency_nbk_status' => 1, 'currency_nbk_key' => $key), '192.0.2.5', true, array('HTTP/1.1 403 Forbidden'), 'NBK: forbidden', false, '0123456789ABCDEF0123456789ABCDEF'),
+	// A forged key[]=x reaches the controller as an array; hash_equals() would throw on 8.x.
+	'key as array'                    => array(array('currency_nbk_status' => 1, 'currency_nbk_key' => $key), '192.0.2.5', true, array('HTTP/1.1 403 Forbidden'), 'NBK: forbidden', false, array($key)),
+	'stored key is an array'          => array(array('currency_nbk_status' => 1, 'currency_nbk_key' => array($key)), '192.0.2.5', true, array('HTTP/1.1 403 Forbidden'), 'NBK: forbidden', false, $key),
+	'right key, no IP lock'           => array(array('currency_nbk_status' => 1, 'currency_nbk_key' => $key), '192.0.2.5', true, array(), 'NBK: ok', true, $key),
+	'right 64-char key'               => array(array('currency_nbk_status' => 1, 'currency_nbk_key' => $key64), '192.0.2.5', true, array(), 'NBK: ok', true, $key64),
+	// The IP lock and the key are independent: each one alone is enough to refuse.
+	'right key, IP mismatch'          => array(array('currency_nbk_status' => 1, 'currency_nbk_ip' => '10.0.0.1', 'currency_nbk_key' => $key), '10.0.0.2', true, array('HTTP/1.1 403 Forbidden'), 'NBK: forbidden', false, $key),
+	'wrong key, IP match'             => array(array('currency_nbk_status' => 1, 'currency_nbk_ip' => '10.0.0.1', 'currency_nbk_key' => $key), '10.0.0.1', true, array('HTTP/1.1 403 Forbidden'), 'NBK: forbidden', false, $wrong),
+	'disabled, wrong key'             => array(array('currency_nbk_status' => 0, 'currency_nbk_key' => $key), '192.0.2.5', true, array('HTTP/1.1 403 Forbidden'), 'NBK: disabled', false, $wrong),
 );
 
 foreach ($cron as $label => $case) {
@@ -722,6 +748,10 @@ foreach ($cron as $label => $case) {
 
 	if ($case[1] !== null) {
 		$registry->get('request')->server['REMOTE_ADDR'] = $case[1];
+	}
+
+	if ($case[6] !== null) {
+		$registry->get('request')->get['key'] = $case[6];
 	}
 
 	$controller->refresh();
@@ -763,7 +793,7 @@ check('uninstall: removes the event', $events->calls === array(array('deleteEven
 
 // --- Admin controller: settings form validation -----------------------------
 
-$post = array('currency_nbk_margins' => 'EUR:3,5,USD:2', 'currency_nbk_status' => '1');
+$post = array('currency_nbk_margins' => 'EUR:3,5,USD:2', 'currency_nbk_status' => '1', 'currency_nbk_key' => $key);
 list($response, $settings) = nbk_admin_index('POST', $post, array());
 $output = is_array($response->output) ? $response->output : array();
 check('settings: valid margins are saved', $settings->calls === array(array('editSetting', 'currency_nbk', $post)) && $response->redirect !== null && isset($output['error_margins']) && $output['error_margins'] === '', show(array($settings->calls, $response->redirect, $output)));
@@ -793,7 +823,7 @@ list($response, $settings) = nbk_admin_index('POST', array('currency_nbk_margins
 $output = is_array($response->output) ? $response->output : array();
 check('settings: format error wins over range error', isset($output['error_margins']) && $output['error_margins'] === 'error_margins', show($output));
 
-$post = array('currency_nbk_margins' => 'USD:-99,99', 'currency_nbk_status' => '1');
+$post = array('currency_nbk_margins' => 'USD:-99,99', 'currency_nbk_status' => '1', 'currency_nbk_key' => $key);
 list($response, $settings) = nbk_admin_index('POST', $post, array());
 check('settings: USD:-99,99 is in range and saved', $settings->calls === array(array('editSetting', 'currency_nbk', $post)) && $response->redirect !== null, show(array($settings->calls, $response->redirect)));
 
@@ -807,7 +837,7 @@ list($response, $settings) = nbk_admin_index('POST', array('currency_nbk_margins
 $output = is_array($response->output) ? $response->output : array();
 check('settings: USD:99999999999 is rejected as out of range', $settings->calls === array() && $response->redirect === null && isset($output['error_margins'], $output['currency_nbk_margins']) && $output['error_margins'] === 'error_margins_range' && $output['currency_nbk_margins'] === 'USD:99999999999', show(array($settings->calls, $response->redirect, $output)));
 
-$post = array('currency_nbk_margins' => 'USD:100', 'currency_nbk_status' => '1');
+$post = array('currency_nbk_margins' => 'USD:100', 'currency_nbk_status' => '1', 'currency_nbk_key' => $key);
 list($response, $settings) = nbk_admin_index('POST', $post, array());
 check('settings: USD:100 is in range and saved', $settings->calls === array(array('editSetting', 'currency_nbk', $post)) && $response->redirect !== null, show(array($settings->calls, $response->redirect)));
 
@@ -844,7 +874,8 @@ check('settings: valid values pass through unchanged', isset($output['currency_n
 list($response, $settings) = nbk_admin_index('GET', array(), array());
 $output = is_array($response->output) ? $response->output : array();
 check('settings: missing settings render as empty strings', isset($output['currency_nbk_ip'], $output['currency_nbk_margins']) && $output['currency_nbk_ip'] === '' && $output['currency_nbk_margins'] === '', show($output));
-check('settings: cron command is unchanged', isset($output['currency_nbk_cron']) && $output['currency_nbk_cron'] === 'curl -s &quot;https://shop.test/index.php?route=extension/currency/nbk/refresh&quot;', show($output));
+// Cron refuses every request without a stored key, so a keyless command would only mislead.
+check('settings: no stored key renders an empty cron command', isset($output['currency_nbk_cron'], $output['currency_nbk_key']) && $output['currency_nbk_cron'] === '' && $output['currency_nbk_key'] === '', show($output));
 
 list($response, $settings) = nbk_admin_index('POST', array('currency_nbk_ip' => array('x'), 'currency_nbk_margins' => array('x'), 'currency_nbk_status' => '1'), array());
 $output = is_array($response->output) ? $response->output : array();
@@ -895,7 +926,7 @@ list($response, $settings, $spy) = nbk_admin_index('POST', array('currency_nbk_s
 $output = is_array($response->output) ? $response->output : array();
 check('settings: nested arrays in all three fields are rejected', $settings->calls === array() && isset($output['error_warning'], $output['error_ip'], $output['error_margins']) && $output['error_warning'] === 'error_status' && $output['error_ip'] === 'error_ip' && $output['error_margins'] === 'error_margins' && NbkProbe::$filterVarNonScalar === $probe && nbk_non_scalar_calls($spy->calls) === array(), show(array($settings->calls, NbkProbe::$filterVarNonScalar - $probe, $spy->calls, $output)));
 
-$post = array('currency_nbk_status' => '0', 'currency_nbk_ip' => '10.0.0.1', 'currency_nbk_margins' => 'EUR:3,5');
+$post = array('currency_nbk_status' => '0', 'currency_nbk_ip' => '10.0.0.1', 'currency_nbk_margins' => 'EUR:3,5', 'currency_nbk_key' => $key);
 list($response, $settings) = nbk_admin_index('POST', $post, array());
 check('settings: scalar POST is saved exactly as sent', $settings->calls === array(array('editSetting', 'currency_nbk', $post)) && $response->redirect !== null, show(array($settings->calls, $response->redirect)));
 
@@ -907,7 +938,7 @@ foreach (array('abc', '5', '', '01', ' 1', 'on', 'true') as $value) {
 }
 
 foreach (array('0', '1') as $value) {
-	$post = array('currency_nbk_status' => $value, 'currency_nbk_ip' => '', 'currency_nbk_margins' => 'EUR:3');
+	$post = array('currency_nbk_status' => $value, 'currency_nbk_ip' => '', 'currency_nbk_margins' => 'EUR:3', 'currency_nbk_key' => $key);
 	list($response, $settings) = nbk_admin_index('POST', $post, array());
 	check('settings: status ' . show($value) . ' is saved exactly as sent', $settings->calls === array(array('editSetting', 'currency_nbk', $post)) && $response->redirect !== null, show(array($settings->calls, $response->redirect)));
 }
@@ -928,10 +959,65 @@ foreach (array('00', '0.0', 'abc') as $value) {
 }
 
 foreach (array('', '10.0.0.1', '2001:db8::1') as $value) {
-	$post = array('currency_nbk_status' => '1', 'currency_nbk_ip' => $value, 'currency_nbk_margins' => 'EUR:3');
+	$post = array('currency_nbk_status' => '1', 'currency_nbk_ip' => $value, 'currency_nbk_margins' => 'EUR:3', 'currency_nbk_key' => $key);
 	list($response, $settings) = nbk_admin_index('POST', $post, array());
 	check('settings: ip ' . show($value) . ' is saved exactly as sent', $settings->calls === array(array('editSetting', 'currency_nbk', $post)) && $response->redirect !== null, show(array($settings->calls, $response->redirect)));
 }
+
+// --- Admin controller: cron key ---------------------------------------------
+
+foreach (array($key, $key64) as $value) {
+	$post = array('currency_nbk_status' => '1', 'currency_nbk_ip' => '', 'currency_nbk_margins' => 'EUR:3', 'currency_nbk_key' => $value);
+	list($response, $settings) = nbk_admin_index('POST', $post, array());
+	check('settings: key ' . show($value) . ' is saved exactly as sent', $settings->calls === array(array('editSetting', 'currency_nbk', $post)) && $response->redirect !== null, show(array($settings->calls, $response->redirect)));
+}
+
+// null = no key field at all; the key is required, so that fails like ''.
+foreach (array('', null, '0123456789abcdef0123456789abcde', $key64 . 'Z', $key . "\n", '0123456789abcdef-0123456789abcdef', '0123456789abcdef 0123456789abcdef', 'ключ' . $key, $x) as $value) {
+	$post = array('currency_nbk_status' => '1', 'currency_nbk_ip' => '', 'currency_nbk_margins' => 'EUR:3');
+
+	if ($value !== null) {
+		$post['currency_nbk_key'] = $value;
+	}
+
+	list($response, $settings) = nbk_admin_index('POST', $post, array());
+	$output = is_array($response->output) ? $response->output : array();
+	check('settings: key ' . ($value === null ? '(no field)' : show($value)) . ' is rejected', $settings->calls === array() && $response->redirect === null && isset($output['error_key'], $output['error_ip'], $output['error_margins'], $output['error_warning']) && $output['error_key'] === 'error_key' && $output['error_ip'] === '' && $output['error_margins'] === '' && $output['error_warning'] === '', show(array($settings->calls, $response->redirect, $output)));
+}
+
+list($response, $settings) = nbk_admin_index('POST', array('currency_nbk_status' => '1', 'currency_nbk_ip' => '', 'currency_nbk_margins' => 'EUR:3', 'currency_nbk_key' => array($key)), array());
+$output = is_array($response->output) ? $response->output : array();
+check('settings: array key is rejected and renders as empty string', $settings->calls === array() && $response->redirect === null && isset($output['error_key'], $output['currency_nbk_key']) && $output['error_key'] === 'error_key' && $output['currency_nbk_key'] === '', show(array($settings->calls, $response->redirect, $output)));
+
+list($response, $settings) = nbk_admin_index('POST', array('currency_nbk_status' => '1', 'currency_nbk_ip' => '', 'currency_nbk_margins' => 'EUR:3', 'currency_nbk_key' => $x), array());
+$output = is_array($response->output) ? $response->output : array();
+check('settings: POST markup in key is escaped for the attribute', $settings->calls === array() && isset($output['currency_nbk_key']) && $output['currency_nbk_key'] === '&quot;&gt;&lt;b&gt;x&lt;/b&gt;', show(array($settings->calls, $output)));
+
+list($response, $settings) = nbk_admin_index('POST', array('currency_nbk_status' => '1', 'currency_nbk_ip' => '', 'currency_nbk_margins' => 'EUR:3', 'currency_nbk_key' => $esc), array());
+$output = is_array($response->output) ? $response->output : array();
+check('settings: pre-escaped POST key is not double-escaped', isset($output['currency_nbk_key']) && $output['currency_nbk_key'] === '&quot;&gt;&lt;b&gt;x&lt;/b&gt;', show($output));
+
+list($response, $settings) = nbk_admin_index('GET', array(), array('currency_nbk_key' => $x));
+$output = is_array($response->output) ? $response->output : array();
+check('settings: stored markup in key is escaped on GET', isset($output['currency_nbk_key']) && $output['currency_nbk_key'] === '&quot;&gt;&lt;b&gt;x&lt;/b&gt;', show($output));
+
+list($response, $settings) = nbk_admin_index('GET', array(), array('currency_nbk_key' => $key));
+$output = is_array($response->output) ? $response->output : array();
+check('settings: GET shows stored key and cron command with it', isset($output['currency_nbk_key'], $output['currency_nbk_cron'], $output['error_key']) && $output['currency_nbk_key'] === '0123456789abcdef0123456789abcdef' && $output['currency_nbk_cron'] === 'curl -s &quot;https://shop.test/index.php?route=extension/currency/nbk/refresh&amp;key=0123456789abcdef0123456789abcdef&quot;' && $output['error_key'] === '', show($output));
+
+// Only a hand-edited DB can hold such a key; it still must not break the shell quoting.
+list($response, $settings) = nbk_admin_index('GET', array(), array('currency_nbk_key' => 'a"b$c'));
+$output = is_array($response->output) ? $response->output : array();
+check('settings: cron command url-encodes an odd stored key', isset($output['currency_nbk_cron']) && $output['currency_nbk_cron'] === 'curl -s &quot;https://shop.test/index.php?route=extension/currency/nbk/refresh&amp;key=a%22b%24c&quot;', show($output));
+
+// Cron only knows the saved key, so an unsaved POST must not leak into the command.
+list($response, $settings) = nbk_admin_index('POST', array('currency_nbk_status' => '1', 'currency_nbk_ip' => '', 'currency_nbk_margins' => 'EUR:3,bad', 'currency_nbk_key' => $key64), array('currency_nbk_key' => $key));
+$output = is_array($response->output) ? $response->output : array();
+check('settings: cron command uses the stored key, not the POSTed one', $settings->calls === array() && isset($output['currency_nbk_cron'], $output['currency_nbk_key']) && $output['currency_nbk_cron'] === 'curl -s &quot;https://shop.test/index.php?route=extension/currency/nbk/refresh&amp;key=0123456789abcdef0123456789abcdef&quot;' && $output['currency_nbk_key'] === 'AbCdEfGhIjKlMnOpQrStUvWxYz0123456789AbCdEfGhIjKlMnOpQrStUvWxYz01', show(array($settings->calls, $output)));
+
+list($response, $settings) = nbk_admin_index('POST', array('currency_nbk_status' => '1', 'currency_nbk_ip' => '', 'currency_nbk_margins' => 'EUR:3', 'currency_nbk_key' => ''), array(), false);
+$output = is_array($response->output) ? $response->output : array();
+check('settings: permission error wins, key error still reported', $settings->calls === array() && isset($output['error_warning'], $output['error_key']) && $output['error_warning'] === 'error_permission' && $output['error_key'] === 'error_key', show(array($settings->calls, $output)));
 
 list($response, $settings) = nbk_admin_index('POST', array('currency_nbk_status' => 'abc', 'currency_nbk_ip' => '0', 'currency_nbk_margins' => 'EUR:3'), array());
 $output = is_array($response->output) ? $response->output : array();
